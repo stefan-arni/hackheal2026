@@ -104,6 +104,23 @@ def rotation_to_y(n: np.ndarray) -> np.ndarray:
     return np.eye(3) + s * K + (1 - c) * K @ K
 
 
+def true_to_sam_rotation(crop_center_px: np.ndarray, frame_size: tuple[int, int], focal: float) -> np.ndarray:
+    """Rotation (3,3) taking directions from the true camera frame (principal point at the full-frame
+    center) to SAM's frame, which assumes the principal point at the crop center: the true ray
+    through the crop center becomes SAM's optical axis. Use it for phone gravity / vanishing points."""
+    W, H = frame_size
+    r = np.array([(crop_center_px[0] - W / 2) / focal, (crop_center_px[1] - H / 2) / focal, 1.0])
+    r /= np.linalg.norm(r)
+    z = np.array([0.0, 0.0, 1.0])
+    k = np.cross(r, z)
+    s, c = np.linalg.norm(k), float(r @ z)
+    if s < 1e-12:
+        return np.eye(3)
+    k /= s
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + s * K + (1 - c) * K @ K
+
+
 def align_to_floor(points: np.ndarray, R: np.ndarray, origin: np.ndarray) -> np.ndarray:
     """Map camera-frame points (..., 3) to the floor frame: R @ (p − origin).
 

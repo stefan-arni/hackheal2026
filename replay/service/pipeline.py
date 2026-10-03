@@ -27,10 +27,14 @@ Y_UP = np.diag([1.0, -1.0, -1.0])
 # Tunables (glue choices, not math)
 SMOOTH_SIGMA_S = 0.3
 EVENT_MARGIN_S = 1.0  # frames this close to an event are not "stance"
-FLOOR_TOL_M = 0.015  # contact threshold for BOS
+FLOOR_TOL_M = 0.015  # minimum contact threshold for BOS (spec); widened to CONTACT_NOISE_K × vertical noise
+CONTACT_NOISE_K = 3.0  # real SAM: ~0.9–1.3 cm vertical foot noise -> ~3 cm band; synthetic (3 mm) keeps 1.5 cm
+FLOOR_TOL_MAX_M = 0.035
 FLOOR_PERCENTILE = 1.0  # floor height = this percentile of vertex heights above the fitted foot-keypoint plane
 SOLE_BAND_M = 0.012  # pass-2 floor fit uses vertices within this of the pass-1 floor
-FOOT_HEIGHT_M = 0.08  # vertices below this (aligned, metric) count as foot for the noise floor
+FOOT_HEIGHT_M = 0.08
+GROUND_ANCHOR_MAX_M = 0.05  # re-anchor a frame's lowest point to the floor if it floats/sinks less than this
+GROUND_ANCHOR_PCT = 0.2  # "lowest point" = this percentile of vertex heights (robust to a few spikes)  # vertices below this (aligned, metric) count as foot for the noise floor
 
 
 @dataclass
@@ -146,7 +150,8 @@ def reprojection_vs_mediapipe(run: Run, landmarks: dict, min_vis: float = 0.5) -
     err = np.full(len(run.t_s), np.nan)
     for f in range(len(run.t_s)):
         W, H = run.image_size[f]
-        uv = g.project_pinhole(run.kp3d[f, sam_i], run.focal[f], W, H) + run.crop[f, :2]
+        to_full = (run.crop[f, 2] - run.crop[f, 0]) / W  # >1 when the frame was downscaled for fal
+        uv = g.project_pinhole(run.kp3d[f, sam_i], run.focal[f], W, H) * to_full + run.crop[f, :2]
         ref = mp_xyv[near[f], mp_i]
         ok = ref[:, 2] >= min_vis
         if ok.sum() >= 5:
@@ -168,6 +173,9 @@ def process(
     *,
     landmarks: dict | None = None,
     stance_intervals_s: list[tuple[float, float]] | None = None,
+    up_cam: np.ndarray | None = None,
+    up_source: str = "external",
+    up_check: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Spec math pipeline, steps 2–11. Returns arrays for the bundle plus diagnostics.
 
@@ -209,20 +217,36 @@ def process(
     head_kp = _kp(names, "nose", "head", "eye")
     floor_pts = K[stance][:, foot_kp].reshape(-1, 3)
     up_hint = K[stance][:, head_kp].reshape(-1, 3).mean(0) - floor_pts.mean(0)
-    centroid, n = g.fit_plane(floor_pts, up_hint)
-    R = g.rotation_to_y(n)
-    heights = g.align_to_floor(V[stance], R, centroid)[..., 1]
-    floor_y = float(np.median(np.percentile(heights, FLOOR_PERCENTILE, axis=1)))
-    sole = heights < floor_y + SOLE_BAND_M
-    if sole.sum() >= 3 * len(floor_pts):
-        sole_pts = V[stance][sole]
-        centroid, n = g.fit_plane(sole_pts, up_hint)
+    if up_cam is not None:  # independent gravity: only height / origin come from the feet
+        centroid = floor_pts.mean(axis=0)
+        n = Y_UP @ (np.asarray(up_cam, float) / np.linalg.norm(up_cam))
+        if n @ up_hint < 0:
+            raise ValueError("up_cam points toward the feet; it must point up (y < 0 in OpenCV axes)")
         R = g.rotation_to_y(n)
         heights = g.align_to_floor(V[stance], R, centroid)[..., 1]
         floor_y = float(np.median(np.percentile(heights, FLOOR_PERCENTILE, axis=1)))
-        floor_source = "sole_vertices"
+        sole = heights < floor_y + SOLE_BAND_M
+        fit_c, fit_n = g.fit_plane(V[stance][sole], up_hint)  # for the report only
+        quality["feet_fit_vs_up_deg"] = round(float(np.degrees(np.arccos(np.clip(fit_n @ n, -1, 1)))), 2)
+        floor_source = up_source
     else:
-        floor_source = "foot_keypoints"
+        centroid, n = g.fit_plane(floor_pts, up_hint)
+        R = g.rotation_to_y(n)
+        heights = g.align_to_floor(V[stance], R, centroid)[..., 1]
+        floor_y = float(np.median(np.percentile(heights, FLOOR_PERCENTILE, axis=1)))
+        sole = heights < floor_y + SOLE_BAND_M
+        if sole.sum() >= 3 * len(floor_pts):
+            sole_pts = V[stance][sole]
+            centroid, n = g.fit_plane(sole_pts, up_hint)
+            R = g.rotation_to_y(n)
+            heights = g.align_to_floor(V[stance], R, centroid)[..., 1]
+            floor_y = float(np.median(np.percentile(heights, FLOOR_PERCENTILE, axis=1)))
+            floor_source = "sole_vertices"
+        else:
+            floor_source = "foot_keypoints"
+    if up_check is not None:
+        nc = Y_UP @ (np.asarray(up_check, float) / np.linalg.norm(up_check))
+        quality["gravity_vs_feet_deg"] = round(float(np.degrees(np.arccos(np.clip(nc @ n, -1, 1)))), 2)
     # origin: mean of per-foot centers (heel ↔ mean of toes), on the floor
     foot_centers = []
     for side in ("left", "right"):
@@ -240,19 +264,33 @@ def process(
     quality["mesh_height_m"] = round(float(np.median(heights)), 3)
     Va = Va * s
 
+    # Ground contact prior: in a balance trial at least one foot is on the floor. SAM's per-frame
+    # vertical noise (~1–3 cm) makes the stance foot float or sink, which empties or floods the
+    # 1.5 cm contact band; shift each frame so its lowest point sits on the floor (|shift| < 5 cm).
+    lowest = np.percentile(Va[..., 1], GROUND_ANCHOR_PCT, axis=1)
+    anchor = np.where(np.abs(lowest) < GROUND_ANCHOR_MAX_M, lowest, 0.0)
+    Va = Va - anchor[:, None, None] * np.array([0.0, 1.0, 0.0])
+    quality["ground_anchor_cm"] = {"median_abs": round(float(np.median(np.abs(anchor))) * 100, 2),
+                                   "max_abs": round(float(np.max(np.abs(anchor))) * 100, 2),
+                                   "frames_not_anchored": int((np.abs(lowest) >= GROUND_ANCHOR_MAX_M).sum())}
+
     # 6. temporal smoothing (non-uniform timestamps)
     Vs = g.gaussian_smooth(t, Va, SMOOTH_SIGMA_S)
 
+    # 11 (early). noise floor on unsmoothed stance foot vertices; it also sets the contact band
+    foot_v = Va[stance][..., 1].mean(axis=0) < FOOT_HEIGHT_M
+    nf = g.noise_floor(Va[stance][:, foot_v])
+    tol = float(np.clip(CONTACT_NOISE_K * nf["y"], FLOOR_TOL_M, FLOOR_TOL_MAX_M))
+    quality["contact_band_cm"] = round(tol * 100, 2)
+
     # 7–9. COM, BOS, stability margin per frame
     com = np.stack([g.center_of_mass(v, run.faces) for v in Vs])
-    bos = [g.support_hull(g.contact_points(v, FLOOR_TOL_M)) for v in Vs]
+    bos = [g.support_hull(g.contact_points(v, tol)) for v in Vs]
     margin = np.array([g.stability_margin(c[[0, 2]], h) for c, h in zip(com, bos)])
     comps = np.array([g.margin_components(c[[0, 2]], h) for c, h in zip(com, bos)])
 
-    # 10. sway heatmap; 11. noise floor on (unsmoothed) stance foot vertices
+    # 10. sway heatmap
     heatmap = g.sway_heatmap(Vs)
-    foot_v = Va[stance][..., 1].mean(axis=0) < FOOT_HEIGHT_M
-    nf = g.noise_floor(Va[stance][:, foot_v])
 
     return {
         "t_s": t,

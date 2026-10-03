@@ -43,10 +43,13 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from service import bundle, pipeline
+import numpy as np
+
+from service import bundle, geometry, pipeline
 from service.fal_budget import Budget, BudgetError
 from service.fal_client_wrap import REPLAY_ROOT, CacheMiss, SamBodyClient
 from service.fal_mock import MockFal
+from service.capture_defaults import LIVE_MAX_HEIGHT_PX
 from service.runs import DEFAULT_CONVENTIONS, load_records, write_frame, write_summary
 
 log = logging.getLogger("replay")
@@ -57,6 +60,10 @@ MOCK_RUN = os.environ.get("REPLAY_MOCK_FAL")
 CONVENTIONS: dict | None = None  # None -> pipeline looks for data/conventions.json
 
 LIVE = os.environ.get("REPLAY_LIVE") == "1"
+# Phone gravity (per frame, `gravity` form field): "check" = report its angle to the feet's floor;
+# "override" = use it for the floor tilt. On IMG_9691, SAM's whole mesh sat ~4.9° off true gravity
+# while its feet stayed flat on its own floor, so overriding moved the COM ~9 cm the wrong way.
+GRAVITY_MODE = os.environ.get("REPLAY_GRAVITY_MODE", "check")
 BUDGET = Budget(override=os.environ.get("REPLAY_BUDGET_OVERRIDE") == "1")
 BACKEND = None
 if MOCK_RUN:
@@ -121,10 +128,29 @@ def get_trial(trial_id: str, create: bool = False) -> Trial:
     return trials[trial_id]
 
 
+def downscale_for_live(jpeg: bytes, mask: bytes | None) -> tuple[bytes, bytes | None, list[int], float]:
+    """Live trials: shrink frames taller than LIVE_MAX_HEIGHT_PX (faster fal inference). The
+    trial's fixed crop means every frame gets the same scale. Returns (jpeg, mask, size, scale)."""
+    with Image.open(io.BytesIO(jpeg)) as im:
+        W, H = im.size
+        if H <= LIVE_MAX_HEIGHT_PX:
+            return jpeg, mask, [W, H], 1.0
+        s = LIVE_MAX_HEIGHT_PX / H
+        size = (round(W * s), LIVE_MAX_HEIGHT_PX)
+        buf = io.BytesIO()
+        im.convert("RGB").resize(size, Image.LANCZOS).save(buf, "JPEG", quality=92)
+    if mask is not None:
+        with Image.open(io.BytesIO(mask)) as m:
+            mb = io.BytesIO()
+            m.resize(size, Image.NEAREST).save(mb, "PNG")
+            mask = mb.getvalue()
+    return buf.getvalue(), mask, list(size), s
+
+
 async def run_frame(trial: Trial, stem: str, jpeg: bytes, mask: bytes | None, t_ms: float, extra: dict) -> None:
     try:
-        with Image.open(io.BytesIO(jpeg)) as im:
-            size = list(im.size)
+        jpeg, mask, size, scale = downscale_for_live(jpeg, mask)
+        extra = {**extra, "downscale": round(scale, 5)}
         res = await sam().reconstruct(jpeg, mask, run=trial.id, priority=0 if extra["kind"] == "burst" else 1)
         write_frame(
             trial.frames_dir, stem, t_ms=t_ms, image_size=size, response=res.response,
@@ -202,8 +228,13 @@ async def finalize(trial: Trial, payload: EndPayload) -> None:
                                f"{trial.failed} failed); see /status")
         write_summary(trial.frames_dir, {"trialId": trial.id})
         run = await asyncio.to_thread(pipeline.load_run, trial.frames_dir, CONVENTIONS)
+        up = phone_up_in_sam_frame(trial, run)
+        up_kw = {}
+        if up is not None:
+            up_kw = {"up_cam": up, "up_source": "phone_gravity"} if GRAVITY_MODE == "override" else {"up_check": up}
         try:
-            result = await asyncio.to_thread(pipeline.process, run, payload.events, payload.patient_height_cm / 100)
+            result = await asyncio.to_thread(
+                lambda: pipeline.process(run, payload.events, payload.patient_height_cm / 100, **up_kw))
         except NotImplementedError as e:
             log.warning("geometry.py not implemented (%s); publishing raw camera-frame bundle", e)
             result = pipeline.raw_display(run)
@@ -219,6 +250,24 @@ async def finalize(trial: Trial, payload: EndPayload) -> None:
     except Exception as e:
         trial.state, trial.error = "failed", repr(e)
         log.exception("trial %s failed", trial.id)
+
+
+def phone_up_in_sam_frame(trial: Trial, run: pipeline.Run) -> np.ndarray | None:
+    """Median phone gravity -> 'up' in SAM's camera frame, or None if the phone sent none.
+
+    Contract (capture side): `gravity` = direction of gravity (pointing DOWN) in the camera's
+    OpenCV frame for the full, uncropped image: x right, y down, z forward; any magnitude.
+    iOS rear camera in portrait: (gx, -gy, -gz) from CMDeviceMotion.gravity.
+    """
+    recs = [r for r in load_records(trial.frames_dir) if r.get("gravity") and r.get("usable")]
+    if not recs:
+        return None
+    gv = np.array([r["gravity"] for r in recs], float)
+    gv /= np.linalg.norm(gv, axis=1, keepdims=True)
+    up_true = -np.median(gv, axis=0)
+    crop, size = np.array(recs[0]["crop"], float), recs[0]["frame_size"]
+    R = geometry.true_to_sam_rotation((crop[:2] + crop[2:]) / 2, tuple(size), float(np.median(run.focal)))
+    return R @ (up_true / np.linalg.norm(up_true))
 
 
 async def notify_ready(trial: Trial) -> None:

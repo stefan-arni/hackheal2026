@@ -60,7 +60,7 @@ def main() -> None:
     print(f"trial {a.trial:.0f} s, error at {a.error:.0f} s with a ±0.5 s 10 fps burst, concurrency {a.concurrency}, "
           f"latency {a.lat[0]}–{a.lat[1]} s; times are seconds after the trial ends (median of {a.runs})")
     print(f"{'uniform fps':>11} {'priority':>8} {'frames':>6} {'error replay':>12} {'full replay':>11}  throughput limit")
-    for fps in (1.5, 2.0, 3.0):
+    for fps in (1.5, 2.0, 3.0):  # capture_defaults.LIVE_UNIFORM_FPS = 1.5
         for prio in (True, False):
             err, full = [], []
             fr = frames(a.trial, fps, a.error, 10, 0.5)

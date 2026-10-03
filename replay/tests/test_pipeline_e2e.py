@@ -151,3 +151,16 @@ def test_noise_floor(synthetic):
     for a in "xyz":
         assert 0.5 * sigma < nf[a] < 2 * sigma, f"{a} jitter {nf[a] * 1000:.1f} mm vs injected {sigma * 1000:.1f} mm"
     assert res["quality"]["ap_real"]  # coupled depth error must be removed by focal normalization
+
+
+def test_gravity_override_and_check(synthetic):
+    """Phone gravity path: the true 'up' as up_cam reproduces the floor; up_check only reports."""
+    gt, run, res = synthetic
+    up = np.asarray(gt["floor_plane_camera"]["normal"])
+    over = pipeline.process(run, gt["events"], gt["patient_height_m"], up_cam=up, up_source="phone_gravity")
+    angle = np.degrees(np.arccos(np.clip(np.asarray(over["floor_normal_cam"]) @ up, -1, 1)))
+    assert angle < 0.01 and over["quality"]["floor_source"] == "phone_gravity"
+    assert over["com"][:, 1].mean() == pytest.approx(np.asarray(gt["com_floor"])[:, 1].mean(), abs=0.015)
+    chk = pipeline.process(run, gt["events"], gt["patient_height_m"], up_check=up)
+    assert chk["quality"]["gravity_vs_feet_deg"] < 1.0
+    np.testing.assert_allclose(chk["com"], res["com"])  # a check never changes the result
