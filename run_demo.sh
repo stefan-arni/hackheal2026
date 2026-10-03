@@ -13,6 +13,7 @@
 #   --height CM         patient height for metric scaling (default 185; 0 = SAM's own scale)
 #   --name TEXT         session name (shown on the session report)
 #   --duration S        BESS seconds per stance (default 10: the shortened demo protocol)
+#   --countdown S       seconds from pressing a stance in the app to scoring (default 8: walk back into position)
 #   --deadline S        publish each trial's replay this long after it ends (default 30)
 #   --max-usd X         hard stop: the replay service makes at most X dollars of fal calls (incl. warm-up)
 #   --yes               don't ask (live start / warm-up); only after the spend was approved
@@ -22,14 +23,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPLAY="$ROOT/replay"; POSECAM="$ROOT/posecam"
-MODE=cache; WARMUP=0; EYES=0; TUNNEL=0; HEIGHT=185; NAME="demo"; DURATION=10; DEADLINE=30; STRAGGLER="12:150"; MAXUSD=""; YES=0
+MODE=cache; WARMUP=0; EYES=0; TUNNEL=0; HEIGHT=185; NAME="demo"; DURATION=10; COUNTDOWN=8; DEADLINE=30; STRAGGLER="12:150"; MAXUSD=""; YES=0
 REPLAY_PORT=8017; POSE_PORT=8765; EYE_PORT=8766
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live) MODE=live ;; --mock) MODE=mock ;; --warmup) WARMUP=1 ;; --eyes) EYES=1 ;; --tunnel) TUNNEL=1 ;;
     --height) HEIGHT="$2"; shift ;; --name) NAME="$2"; shift ;; --duration) DURATION="$2"; shift ;;
     --deadline) DEADLINE="$2"; shift ;; --straggler) STRAGGLER="$2"; shift ;;
-    --max-usd) MAXUSD="$2"; shift ;; --yes) YES=1 ;;
+    --max-usd) MAXUSD="$2"; shift ;; --yes) YES=1 ;; --countdown) COUNTDOWN="$2"; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac; shift
@@ -81,7 +82,7 @@ if [[ $WARMUP == 1 ]]; then
 fi
 
 # ---- posecam (MediaPipe 0.10.21 on CPU: newer builds abort without a Metal GPU service)
-PC_ARGS=(--port $POSE_PORT --bess-duration "$DURATION" --replay-url "http://localhost:$REPLAY_PORT"
+PC_ARGS=(--port $POSE_PORT --bess-duration "$DURATION" --bess-countdown "$COUNTDOWN" --replay-url "http://localhost:$REPLAY_PORT"
          --publish-url "http://localhost:$REPLAY_PORT" --session-id "$SID")
 [[ "$HEIGHT" != 0 ]] && PC_ARGS+=(--patient-height-cm "$HEIGHT")
 UVP=(uv run --no-project --python 3.12 --with "mediapipe==0.10.21" --with "numpy<2" --with "opencv-python-headless>=4.9,<4.11" --with "websockets>=13")
@@ -109,7 +110,7 @@ IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null ||
 cat <<EOF
 
 ================================================================
- session          $SID   (fal: $MODE, $DURATION s per stance, replay deadline $DEADLINE s${MAXUSD:+, spend cap \$$MAXUSD})
+ session          $SID   (fal: $MODE, $COUNTDOWN s countdown + $DURATION s per stance, replay deadline $DEADLINE s${MAXUSD:+, spend cap \$$MAXUSD})
  doctor dashboard http://localhost:$REPLAY_PORT/dashboard/$SID
 EOF
 [[ -n "$PUBLIC" ]] && echo " public dashboard $PUBLIC/dashboard/$SID"

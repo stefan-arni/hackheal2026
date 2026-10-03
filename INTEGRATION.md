@@ -176,9 +176,12 @@ running it (step 2).
 
 ## What's still missing
 
-- The iOS camera pipeline calling `sendFrame` (BessTestView only has the WebSocket client);
-  frames from the phone carry no `timestamp_ms` yet (server receive time is used).
-  Plan B (Continuity Camera) avoids this; its capture still needs one test with camera permission.
+- The posecam iOS app (merged from `balance`) streams JSON frames to ws://<laptop>:8765: 640 px
+  JPEG in sensor landscape + `"rotate": 90` (the server rotates; the replay gets the upright
+  frame), LiDAR depth, `timestamp_ms` on the phone's uptime clock (one clock per trial), up to
+  30 fps, and its stance buttons send `bess_start` on the same connection. It needs a LiDAR
+  iPhone (Pro). Tested only by impersonation (`rehearse_protocol.py --as-app`), not on a phone.
+- Plan B (Continuity Camera) capture still needs one test with camera permission.
 - No real-iPhone end-to-end run yet; the mock rehearsal uses the recorded clip at 720 px.
 - Mock replays use the nearest stored pose per frame, so their numbers are not meaningful
   (the dashboard and viewer say "fal MOCK").

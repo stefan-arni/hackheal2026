@@ -87,10 +87,13 @@ def pick_segments(timeline: Path, countdown: float, duration: float) -> dict[str
     return picks
 
 
-def decode(clip: Path, start: float, length: float, width: int) -> list[bytes]:
+APP_VF = "scale=-2:640,transpose=2"  # --as-app: like the iPhone app, 640 px long side, sensor landscape
+
+
+def decode(clip: Path, start: float, length: float, width: int, vf: str | None = None) -> list[bytes]:
     """JPEG frames of clip[start, start+length] at the clip's rate, rotation applied, `width` px wide."""
     out = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(clip),
-                          "-vf", f"scale={width}:-2", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "-"],
+                          "-vf", vf or f"scale={width}:-2", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "-"],
                          capture_output=True, check=True).stdout
     frames, i = [], 0
     while True:
@@ -208,17 +211,21 @@ async def run_camera_protocol(ws, a, t0: float, trial_end: asyncio.Queue) -> int
 # ------------------------------------------------------------------ streaming
 
 class Streamer:
-    def __init__(self, ws, fps: float):
+    def __init__(self, ws, fps: float, as_app: bool = False):
         self.ws, self.period, self.sent, self.fid = ws, 1.0 / fps, 0, 0
         self.next_t = time.monotonic()
+        self.as_app = as_app  # sideways frames + "rotate": 90 + device-uptime timestamps, like the iPhone app
 
     async def frames(self, jpegs: list[bytes]) -> None:
         for j in jpegs:
             self.next_t += self.period
             await asyncio.sleep(max(0.0, self.next_t - time.monotonic()))
             self.fid += 1
-            await self.ws.send(json.dumps({"type": "frame", "image": base64.b64encode(j).decode(),
-                                           "frame_id": self.fid, "timestamp_ms": round(time.time() * 1000, 1)}))
+            msg = {"type": "frame", "image": base64.b64encode(j).decode(), "frame_id": self.fid,
+                   "timestamp_ms": round((time.monotonic() if self.as_app else time.time()) * 1000, 1)}
+            if self.as_app:
+                msg.update(rotate=90, camera="lidar")
+            await self.ws.send(json.dumps(msg))
             self.sent += 1
 
     async def idle(self, loop: list[bytes], seconds: float) -> None:
@@ -305,8 +312,9 @@ async def main_async(a) -> None:
         lp = rep["longest_planted"]
     print("decoding…")
     if segments:
-        seg_frames = {st: decode(clip, t0 - a.countdown, trial_len + 0.5, a.width) for st, t0 in segments.items()}
-        idle = decode(clip, lp["start_s"], lp["duration_s"], a.width)
+        vf = APP_VF if a.as_app else None
+        seg_frames = {st: decode(clip, t0 - a.countdown, trial_len + 0.5, a.width, vf) for st, t0 in segments.items()}
+        idle = decode(clip, lp["start_s"], lp["duration_s"], a.width, vf)
         fps = max(len(f) for f in seg_frames.values()) / (trial_len + 0.5)
     else:
         whole = decode(clip, 0, 1e6, a.width)
@@ -333,7 +341,7 @@ async def session_run(a, clip, segments, seg_frames, idle, fps, starts=None) -> 
     trial_end: asyncio.Queue = asyncio.Queue()
     async with websockets.connect(a.ws, max_size=None) as ws:
         lt = asyncio.create_task(listen(ws, log, t0, trial_end))
-        s = Streamer(ws, fps or 30.0)
+        s = Streamer(ws, fps or 30.0, as_app=a.as_app)
         if a.camera:
             s.sent = await run_camera_protocol(ws, a, t0, trial_end)
         elif segments:
@@ -449,6 +457,8 @@ def main() -> None:
     p.add_argument("--price", type=float, default=0.018)
     p.add_argument("--shots", type=Path, help="save dashboard screenshots + timeline.json here")
     p.add_argument("--dry-run", action="store_true", help="only print the chosen segments")
+    p.add_argument("--as-app", action="store_true",
+                   help="impersonate the iPhone app: 640x480-style sideways JPEGs with rotate 90, uptime timestamps")
     p.add_argument("--list-cameras", action="store_true", help="list macOS camera devices and exit")
     p.add_argument("--camera", help="live camera instead of the clip: auto (iPhone if present), an index, or a name")
     p.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0, help="camera: rotate clockwise")
