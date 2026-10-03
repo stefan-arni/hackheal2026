@@ -200,6 +200,10 @@ def write_report(out: Path, meta: dict, stats: dict, result: dict, *, title: str
                 overlay_image(assets / name, out / fr["src_url"], V_raw[i], faces, cam["M"], cam["t"][i], cam["focal"][i],
                               cam["image_size"][i], fr.get("src_scale", 1.0), f"{t[i]:.2f} s ({dtv:+.1f})")
                 strip.append(f'<img src="report_assets/{name}" alt="frame at {t[i]:.2f} s with the replay mesh overlaid">')
+        srcs = ("sources: " + " · ".join(
+            f'<b>{html.escape(x["source"])}</b> {x["t_ms"] / 1000 - t_abs[0]:.2f} s'
+            + (f' ({html.escape(x["kind"].replace("_", " "))})' if x["kind"] != "foot_down" else "")
+            for x in d.get("sources", []))) if d.get("sources") else ""
         lead = (f'COM left the base of support <b>{d["lead_s"]:.1f} s</b> before' if d.get("lead_s") is not None
                 else "COM stayed inside the base of support beforehand")
         unc = '<span class="pill warn">uncertain</span>' if d["uncertain"] else ""
@@ -207,7 +211,7 @@ def write_report(out: Path, meta: dict, stats: dict, result: dict, *, title: str
         cards.append(f'''<div class="event"><div class="ev-h"><span class="badge">{d["n"]}</span>
           <b>{html.escape(d["label"].replace(" · uncertain", ""))}</b> {unc}<span class="t">{d["tt"]:.2f} s{res_txt}</span></div>
           <div class="ev-m">min margin <b style="color:{_margin_color(d.get("min_margin_cm"))}">{_fmt(d.get("min_margin_cm"), 1, " cm")}</b>
-          · {lead} · source: {html.escape(d["source"])}</div><div class="strip">{"".join(strip)}</div></div>''')
+          · {lead}</div><div class="ev-s">{srcs}</div><div class="strip">{"".join(strip)}</div></div>''')
 
     mg, ml, tl = stats.get("margin", {}), stats.get("ml_sway", {}), stats.get("trunk_lean_deg", {})
     st, q, nf = stats.get("stance", {}), stats.get("quality", {}), stats.get("noise_floor_cm", {})
@@ -241,7 +245,7 @@ h1{{font-size:22px;margin:0}} .sub{{color:var(--muted);font-weight:600}} .right{
 h2{{font-size:13px;margin:3mm 0 1mm;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}}
 .events{{display:grid;grid-template-columns:repeat({max(1, len(cards))},1fr);gap:3mm}} .event{{border:1px solid var(--line);border-radius:8px;padding:6px}}
 .ev-h{{display:flex;gap:6px;align-items:center}} .ev-h .t{{margin-left:auto;font-weight:800}} .badge{{background:{AMBER};color:#fff;border-radius:999px;width:20px;height:20px;display:inline-grid;place-items:center;font-weight:800;font-size:12px}}
-.ev-m{{color:var(--muted);font-size:11.5px;margin:3px 0}} .strip{{display:grid;grid-template-columns:repeat(3,1fr);gap:2px}} .strip img{{width:100%;border-radius:4px}}
+.ev-m{{color:var(--muted);font-size:11.5px;margin:3px 0}} .ev-s{{font-size:11px;margin:0 0 4px;color:var(--ink)}} .strip{{display:grid;grid-template-columns:repeat(3,1fr);gap:2px}} .strip img{{width:100%;border-radius:4px}}
 footer{{margin-top:3mm;border-top:1px solid var(--line);padding-top:2mm;color:var(--muted);font-size:10.5px}} footer b{{color:var(--ink)}}
 a.back{{color:{BLUE}}} @media print{{body{{background:#fff}} .page{{margin:0;box-shadow:none;width:auto;min-height:0}} .noprint{{display:none}} @page{{size:A4;margin:0}}}}
 </style></head><body><div class="page">

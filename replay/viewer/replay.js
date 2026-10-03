@@ -510,7 +510,8 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
       const x = xOf(td.tt * 1000);
       g.strokeStyle = td.d.uncertain ? '#fde68a' : '#fbbf24'; g.lineWidth = 2.5; g.setLineDash(td.d.uncertain ? [5, 4] : []);
       g.beginPath(); g.moveTo(x, y0 - 4); g.lineTo(x, y1); g.stroke(); g.setLineDash([]);
-      const txt = `👣${td.d.n} ${td.d.label}`;
+      const ns = (td.d.sources || []).length;
+      const txt = `👣${td.d.n} ${td.d.label}${ns > 1 ? ` · ${ns} sources` : ''}`;
       g.font = '800 13px system-ui, sans-serif'; const tw = g.measureText(txt).width;
       const lx = Math.min(Math.max(x - 8, lastX + 8), w - tw - 6); lastX = lx + tw;
       g.textAlign = 'left'; g.fillStyle = td.d.uncertain ? '#fde68a' : '#fef3c7'; g.fillText(txt, lx, 17);
@@ -551,8 +552,10 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
     const head = Number.isFinite(d.lead_s)
       ? `COM leaves BOS · ${d.lead_s.toFixed(1)} s before ${d.side} foot lands · margin ${m.toFixed(1)} cm`
       : `${d.label} · margin ${Number.isFinite(m) ? (m >= 0 ? '+' : '') + m.toFixed(1) + ' cm' : '–'}`;
-    const res = d.resolution_s ? `landing ±${d.resolution_s.toFixed(2)} s · ${d.source}` : d.source;
-    call.innerHTML = `${head}<small>${td.tt.toFixed(2)} s into the trial · ${res}${d.uncertain ? ' · uncertain' : ''}</small>`;
+    const res = d.resolution_s ? `landing ±${d.resolution_s.toFixed(2)} s` : '';
+    const srcs = (d.sources || []).map(x => `${x.source} ${rel(x.t_ms).toFixed(2)} s`).join(' · ');
+    call.innerHTML = `${head}<small>${td.tt.toFixed(2)} s into the trial${res ? ' · ' + res : ''}${d.uncertain ? ' · uncertain' : ''}`
+      + `${srcs ? `<br>sources: ${srcs}` : ''}</small>`;
     const b = el('button', '', 'Continue ▶'); b.onclick = () => { setSpeed(0.5); smooth = false; setPlaying(true); setView('front'); };
     call.append(b); call.style.borderColor = m < 0 ? '#ef4444' : '#f59e0b'; call.style.display = 'block';
   }

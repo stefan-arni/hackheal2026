@@ -204,3 +204,33 @@ def test_report_and_bundle_on_synthetic(synthetic, tmp_path):
         assert needle in page
     assert "validated" not in page.lower()
     assert (tmp_path / "report_assets" / "hero.png").exists()
+
+
+def test_same_physical_event_is_merged(synthetic):
+    """One marker per landing: same side + compatible kind + within 0.7 s of the anchor (SAM)."""
+    from service import analytics
+    gt, _, res = synthetic
+    a0 = analytics.compute(res, [])
+    sam = [d for d in a0["touchdowns"] if d["sources"][0]["source"] == "SAM"]
+    assert sam, "synthetic run should have a SAM-detected landing"
+    t_land = sam[0]["t_ms"]
+    side = sam[0]["side"]
+    other = "left" if side == "right" else "right"
+    events = [
+        {"t": t_land - 300, "kind": "foot_touchdown", "side": side, "source": "posecam"},   # merge
+        {"t": t_land + 250, "kind": "step_stumble_fall", "side": None, "source": "posecam"},  # merge (side unknown)
+        {"t": t_land + 500, "kind": "step", "side": side, "source": "scout"},              # merge
+        {"t": t_land + 200, "kind": "foot_down", "side": other, "source": "scout"},         # other foot: separate
+        {"t": t_land + 1500, "kind": "step", "side": side, "source": "scout"},             # too late: separate
+        {"t": t_land - 100, "kind": "hands_off_hips", "side": None, "source": "posecam"},  # not a landing
+    ]
+    a = analytics.compute(res, events)
+    merged = [d for d in a["touchdowns"] if abs(d["t_ms"] - t_land) < 1]
+    assert len(merged) == 1
+    m = merged[0]
+    assert m["label"].lower().startswith(f"{side} foot down")
+    assert [x["source"] for x in m["sources"]] == ["posecam", "SAM", "posecam", "scout"]
+    assert m["foot"] is not None
+    assert len(a["touchdowns"]) == len(a0["touchdowns"]) + 2  # other-foot event + the late step
+    assert len(a["touchdowns_raw"]) == len(a0["touchdowns_raw"]) + 5  # raw candidates kept (not hands_off_hips)
+    assert len(a["events"]) == len(events)

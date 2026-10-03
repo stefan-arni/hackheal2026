@@ -124,8 +124,8 @@ def compute(result: dict[str, Any], events: list[dict] | None = None,
         up = max(LIFT_MIN_M, LIFT_NOISE_K * float((result.get("noise_floor") or {}).get("y", 0.0)))
         out["stance"], stance_label = _stance(t, dt, K, names, expected_stance, up)
         if stance_label is not None:
-            out["touchdowns"] = _touchdowns(t, m, K, names, stance_label, out.get("margin", {}).get("outside_episodes", []),
-                                            events or [], small)
+            out["touchdowns"], out["touchdowns_raw"] = _touchdowns(
+                t, m, K, names, stance_label, out.get("margin", {}).get("outside_episodes", []), events or [], small)
         out["series"] = {
             "t_ms": [round(float(x) * 1000, 1) for x in t],
             "trunk_ml_deg": None if series_lean is None else [round(float(x), 1) for x in series_lean[0]],
@@ -181,47 +181,96 @@ def _foot_xz(K, names, side, i):
     return {"heel": [round(float(h[0]), 4), round(float(h[1]), 4)], "toe": [round(float(to[0]), 4), round(float(to[1]), 4)]}
 
 
+LANDING_KIND = {"foot_down": "foot_down", "foot_touchdown": "foot_down", "touchdown": "foot_down",
+                "step": "step", "step_stumble_fall": "step", "toe_touch": "toe_touch", "possible_touchdown": "toe_touch"}
+MERGEABLE = {"foot_down", "step"}  # same physical landing when sides agree and times are close
+MERGE_WINDOW_S = 0.7
+SOURCE_SHORT = {"SAM stance (both feet down)": "SAM"}
+
+
+def _short(source: str) -> str:
+    s = SOURCE_SHORT.get(source, source)
+    return "scout" if s.startswith("scout") else ("posecam" if s.startswith("posecam") else s)
+
+
 def _touchdowns(t, m, K, names, label, episodes, events, small):
-    """Foot landings: SAM stance transitions single -> double (the lifted foot lands), plus external
-    events (scout / metrics) placed at that foot's floor position. Each gets the margin story: the
-    outside-BOS episode that started up to 1.5 s before landing and the COM-exit -> landing lead."""
-    out = []
+    """Foot landings as one marker per physical event.
+
+    Candidates: SAM stance transitions single -> double (the lifted foot lands) plus external
+    landing events (posecam, scout, metrics). A candidate joins a cluster when its kind is
+    compatible (foot_down / step), its side matches (or is unknown) and it lies within 0.7 s of
+    the cluster's anchor (SAM's landing when present, otherwise the earliest event). Each merged
+    marker lists every source with its time and carries the margin story: the outside-BOS episode
+    that started up to 1.5 s before the anchor and the COM-exit -> landing lead time.
+    Returns (merged, raw_candidates)."""
+    raw = []
     for i in range(1, len(label)):
         if label[i - 1].startswith("single") and label[i].startswith("double"):
             side = "right" if label[i - 1] == "single_left" else "left"
-            t_land = (t[i - 1] + t[i]) / 2  # landed between these two frames
-            out.append({"kind": "foot_down", "side": side, "t_ms": round(float(t_land) * 1000, 1),
+            raw.append({"kind": "foot_down", "side": side, "t_ms": round(float((t[i - 1] + t[i]) / 2) * 1000, 1),
                         "resolution_s": round(float(t[i] - t[i - 1]) / 2, 2), "source": "SAM stance (both feet down)",
-                        "frame": i, "foot": _foot_xz(K, names, side, i), "uncertain": False})
+                        "frame": i, "uncertain": False})
     for e in events:
+        kind = LANDING_KIND.get(e.get("kind", ""))
+        if kind is None:  # hands off hips, heel lift, ...: kept in analytics.events, not a landing
+            continue
         te = e["t"] / 1000
         i = int(np.argmin(np.abs(t - te)))
         if abs(t[i] - te) > 1.0:
             continue
-        side = e.get("side") or "right"
-        kind = e.get("kind", "event")
-        out.append({"kind": kind, "side": side, "t_ms": round(float(te) * 1000, 1), "resolution_s": None,
-                    "source": e.get("source", "event list"), "frame": i, "foot": _foot_xz(K, names, side, i),
-                    "uncertain": kind in ("toe_touch", "possible_touchdown")})
+        raw.append({"kind": kind, "side": e.get("side"), "t_ms": round(float(te) * 1000, 1), "resolution_s": None,
+                    "source": e.get("source", "event list"), "frame": i, "uncertain": kind == "toe_touch",
+                    "original_kind": e.get("kind")})
+    # anchored clustering: SAM candidates first so they anchor their clusters
+    order = sorted(raw, key=lambda d: (not d["source"].startswith("SAM"), d["t_ms"]))
+    clusters: list[list[dict]] = []
+    for d in order:
+        home = None
+        if d["kind"] in MERGEABLE:
+            for c in clusters:
+                a = c[0]
+                sides = {x["side"] for x in c if x["side"]}
+                if (a["kind"] in MERGEABLE and abs(d["t_ms"] - a["t_ms"]) <= MERGE_WINDOW_S * 1000
+                        and (d["side"] is None or not sides or d["side"] in sides)):
+                    home = c
+                    break
+        if home is None:
+            clusters.append([d])
+        else:
+            home.append(d)
+    out = []
+    for c in clusters:
+        a = c[0]
+        side = a["side"] or next((x["side"] for x in c if x["side"]), None)
+        kind = "foot_down" if any(x["kind"] == "foot_down" for x in c) else a["kind"]
+        fi = a["frame"]
+        out.append({"kind": kind, "side": side, "t_ms": a["t_ms"], "resolution_s": a["resolution_s"],
+                    "source": _short(a["source"]), "frame": fi, "foot": _foot_xz(K, names, side, fi) if side else None,
+                    "uncertain": all(x["uncertain"] for x in c),
+                    "sources": sorted(({"source": _short(x["source"]), "kind": x.get("original_kind") or x["kind"],
+                                        "t_ms": x["t_ms"]} for x in c), key=lambda x: x["t_ms"])})
     for d in out:
         tl = d["t_ms"] / 1000
         ep = [e for e in episodes if tl - 1.5 <= e["start_ms"] / 1000 <= tl + 0.2]
         win = (t >= tl - 1.5) & (t <= tl + 0.2) & ~np.isnan(m)
         d["min_margin_cm"] = round(float(m[win].min()) * 100, 2) if win.any() else None
-        if d["min_margin_cm"] is not None and abs(d["min_margin_cm"] / 100) < small:
+        if d["min_margin_cm"] is not None and abs(d["min_margin_cm"] / 100) < small and d["kind"] == "toe_touch":
             d["uncertain"] = True
         if ep:
             d["com_exit_ms"] = ep[0]["start_ms"]
             d["lead_s"] = round(tl - ep[0]["start_ms"] / 1000, 2)
-        side_txt = d["side"].capitalize()
-        base = EVENT_LABELS.get(d["kind"], d["kind"].replace("_", " ").capitalize())
-        d["label"] = f"{side_txt} foot down" if d["kind"] == "foot_down" else (f"{base} ({side_txt.lower()})")
+        side_txt = d["side"].capitalize() if d["side"] else ""
+        if d["kind"] == "foot_down":
+            d["label"] = f"{side_txt} foot down".strip() if side_txt else "Foot down"
+        else:
+            base = EVENT_LABELS.get(d["kind"], d["kind"].replace("_", " ").capitalize())
+            d["label"] = f"{base} ({side_txt.lower()})" if side_txt else f"{base} (side unknown)"
         if d["uncertain"]:
             d["label"] += " · uncertain"
     out.sort(key=lambda d: d["t_ms"])
     for k, d in enumerate(out, 1):
         d["n"] = k
-    return out
+    return out, raw
 
 
 def _quality(q: dict, nf: dict) -> dict:
