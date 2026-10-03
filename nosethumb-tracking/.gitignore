@@ -1,0 +1,11 @@
+# CocoaPods: recreated with `pod install` (the MediaPipe frameworks are over 1 GB)
+Pods/
+
+# Xcode per-user and build files
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+
+# macOS
+.DS_Store
