@@ -1,5 +1,7 @@
 # Instant Replay — SAM 3D Body lane
 
+> **Branching:** replay work lives on the `replay` branch, not `main`. When merging replay into main, revert the revert commit first, or the replay files won't come back. (The revert on main is `f99daf4`: run `git revert f99daf4` on the merge branch, then merge.)
+
 Owner: Stefan . Lives in `/replay`. Everything here runs **in the background** and must never block the core product (MediaPipe + optical flow sway metrics, error counts, convergence). If this lane fails, the core still works.
 
 ## What it is
@@ -111,6 +113,7 @@ All of geometry.py is pure functions with unit tests on synthetic data (known pl
 ## Gotchas
 
 - Coordinate conventions (y-down, mirrored front camera, crop offsets) — do the convention check first.
+- **The fixed crop must be centered on the optical axis (or be the full frame).** SAM assumes the principal point is at the center of the image it receives. On IMG_9691 a crop centered 214 px (8.85°) below the true center put the COM ~10 cm behind the feet in quiet stance; the uncropped frame put it over the midfoot (−1 cm). fal's real conventions differ from its docs: `keypoints_3d` are body-relative (add `pred_cam_t`), `.ply` vertices are camera-frame with y and z flipped, keypoint names are hyphenated.
 - Fixed crop per trial; phone-clock timestamps everywhere.
 - Don't wait on the capture teammate: build and test the live tier with `tools/fake_phone.py`.
 - Privacy: this is the only lane where frames leave the phone. Fixed crop + mask minimize what's sent; pitched as opt-in "3D review".

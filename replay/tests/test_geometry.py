@@ -136,6 +136,18 @@ def test_align_to_floor_batched_shape():
     np.testing.assert_allclose(g.align_to_floor(X, np.eye(3), np.ones(3)), X - 1.0)
 
 
+def test_true_to_sam_rotation():
+    np.testing.assert_allclose(g.true_to_sam_rotation(np.array([540.0, 960.0]), (1080, 1920), 1400.0), np.eye(3), atol=1e-12)
+    R = g.true_to_sam_rotation(np.array([560.0, 1174.5]), (1080, 1920), 1384.0)
+    ray = np.array([20.0 / 1384, 214.5 / 1384, 1.0])
+    np.testing.assert_allclose(R @ (ray / np.linalg.norm(ray)), [0, 0, 1], atol=1e-12)
+    np.testing.assert_allclose(R @ R.T, np.eye(3), atol=1e-12)
+    # crop center below the image center: SAM's camera is pitched down relative to the true one,
+    # so true "up" appears tilted toward SAM's forward axis... away from it: up_z becomes negative
+    up_sam = R @ np.array([0.0, -1.0, 0.0])
+    assert up_sam[2] < 0 and np.degrees(np.arcsin(-up_sam[2])) == pytest.approx(np.degrees(np.arctan(214.5 / 1384)), abs=0.5)
+
+
 # --- 5. metric scale -----------------------------------------------------------
 
 
@@ -264,6 +276,14 @@ def test_margin_components_rectangle():
     side, fwd = g.margin_components(np.array([1.8, 0.95]), rect)
     assert side == pytest.approx(0.2)
     assert fwd == pytest.approx(0.05)
+
+
+def test_margin_components_outside_is_negative_offset_to_nearest_point():
+    rect = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]])
+    side, fwd = g.margin_components(np.array([2.5, 0.5]), rect)  # nearest point (2, 0.5)
+    assert side == pytest.approx(-0.5) and fwd == pytest.approx(0.0)
+    side, fwd = g.margin_components(np.array([3.0, 2.0]), rect)  # nearest point: corner (2, 1)
+    assert side == pytest.approx(-1.0) and fwd == pytest.approx(-1.0)
 
 
 # --- 10. sway heatmap -------------------------------------------------------------------

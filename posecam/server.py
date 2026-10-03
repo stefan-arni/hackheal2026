@@ -34,6 +34,13 @@ Plus, when something changes, an extra message right after that frame:
    "session": {"scores": {"double": 1, "tandem": 3, "single": null}, "total": 4, "complete": false}}
 
 Eye tracking is a separate program: eye_server.py (port 8766).
+
+Optional replay forwarding (off by default):
+    python server.py --replay-url http://localhost:8017 [--patient-height-cm 185]
+    python server.py ... --publish-url http://localhost:8017 --session-id <id>   (live doctor dashboard)
+During a BESS test, full frames go to the replay service at 1.5 fps plus 10 fps around each
+error / touchdown, and the events are posted when the test ends (see replay_forward.py).
+Send frames as JSON with "timestamp_ms" (capture time) so replay and BESS share the phone clock.
 """
 
 from __future__ import annotations
@@ -75,6 +82,13 @@ def main():
                         "manual = marked from the app")
     p.add_argument("--bess-countdown", type=float, default=5.0,
                    help="seconds to get into position after pressing a test button")
+    p.add_argument("--replay-url", default=None,
+                   help="forward BESS frames + events to the replay service (e.g. http://localhost:8017)")
+    p.add_argument("--patient-height-cm", type=float, default=None, help="sent to replay with each trial")
+    p.add_argument("--publish-url", default=None,
+                   help="push ~10 Hz live summaries + events to the replay dashboard (e.g. http://localhost:8017)")
+    p.add_argument("--session-id", default=None, help="replay session these trials belong to")
+    p.add_argument("--bess-duration", type=float, default=20.0, help="BESS scoring time per stance (s); demo uses 10")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -98,7 +112,7 @@ def main():
                  duck_cfg.world_drop * 100, duck_cfg.image_drop)
 
     if not args.no_bess:
-        bess_cfg = BessConfig(countdown_s=args.bess_countdown)
+        bess_cfg = BessConfig(countdown_s=args.bess_countdown, duration_s=args.bess_duration)
         log.info("BESS on (eyes: %s)", args.bess_eyes)
 
     from pose_analyzer import PoseAnalyzer, ensure_model
@@ -119,9 +133,24 @@ def main():
                             BessConfig(**vars(bess_cfg)) if bess_cfg else None,
                             bess_eyes=args.bess_eyes)
 
+    forwarder_factory = None
+    if args.replay_url:
+        from replay_forward import ReplayForwarder
+        forwarder_factory = lambda: ReplayForwarder(args.replay_url, patient_height_cm=args.patient_height_cm,  # noqa: E731
+                                                    session_id=args.session_id)
+        log.info("replay forwarding on -> %s", args.replay_url)
+    publisher_factory = None
+    if args.publish_url:
+        if not args.session_id:
+            p.error("--publish-url needs --session-id")
+        from replay_publish import LivePublisher
+        publisher_factory = lambda fw: LivePublisher(args.publish_url, args.session_id, forwarder=fw)  # noqa: E731
+        log.info("live dashboard publishing on -> %s (session %s)", args.publish_url, args.session_id)
+
     try:
         asyncio.run(serve(args.host, args.port, factory, result_type="pose",
-                          events_fn=pose_events, name="pose server"))
+                          events_fn=pose_events, name="pose server", forwarder_factory=forwarder_factory,
+                          publisher_factory=publisher_factory))
     except KeyboardInterrupt:
         pass
 

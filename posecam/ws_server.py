@@ -26,6 +26,7 @@ import json
 import logging
 import socket
 import threading
+import time
 from typing import Callable
 
 import cv2
@@ -61,8 +62,11 @@ def decode_message(message) -> tuple[np.ndarray | None, dict]:
 class Connection:
     """One client stream. Keeps only the newest frame and processes it."""
 
-    def __init__(self, ws, analyzer, result_type: str, events_fn: EventsFn | None = None):
+    def __init__(self, ws, analyzer, result_type: str, events_fn: EventsFn | None = None, forwarder=None,
+                 publisher=None):
         self.ws = ws
+        self.forwarder = forwarder  # optional replay_forward.ReplayForwarder (frames + events)
+        self.publisher = publisher  # optional replay_publish.LivePublisher (dashboard summaries + events)
         self.analyzer = analyzer
         self.result_type = result_type
         self.events_fn = events_fn
@@ -123,10 +127,28 @@ class Connection:
                         {"type": "error", "error": f"unknown message type {meta.get('type')!r}",
                          "command": meta.get("type")}))
                 continue
+            if self.forwarder is not None or self.publisher is not None:
+                recv_ms = time.time() * 1000
+                if self.forwarder is not None:  # every received frame (even ones the model drops)
+                    self._offer(message, frame, meta, recv_ms)
+                meta = {**meta, "server_recv_ms": recv_ms}  # copy: the analyzer's meta is unchanged otherwise
             if self.latest is not None:
                 self.dropped += 1
             self.latest = (frame, meta)
             self.ready.set()
+
+    def _offer(self, message, frame, meta, recv_ms):
+        """Hand the full frame to the forwarder: the JPEG as received, re-encoded only if rotated."""
+        try:
+            if int(meta.get("rotate", 0)) % 360:
+                jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+            elif isinstance(message, (bytes, bytearray)):
+                jpeg = bytes(message)
+            else:
+                jpeg = base64.b64decode(json.loads(message)["image"])
+            self.forwarder.offer_frame(jpeg, meta.get("timestamp_ms"), (frame.shape[1], frame.shape[0]), recv_ms)
+        except Exception:
+            log.exception("replay forward: could not offer frame")
 
     async def process_loop(self):
         while True:
@@ -154,12 +176,24 @@ class Connection:
                 **result,
                 "dropped_frames": self.dropped,
             }))
+            msgs = []
             if self.events_fn:
-                for msg in self.events_fn(result, frame_id):
+                msgs = self.events_fn(result, frame_id)
+                for msg in msgs:  # every event carries the capture time of the frame that triggered it
+                    msg.setdefault("client_timestamp_ms", meta.get("timestamp_ms"))
                     await self.ws.send(json.dumps(msg))
+                if self.forwarder is not None and msgs:
+                    self.forwarder.on_messages(msgs, meta.get("timestamp_ms"), meta.get("server_recv_ms"))
+            if self.publisher is not None:
+                try:
+                    self.publisher.on_result(result, msgs, meta.get("timestamp_ms"), meta.get("server_recv_ms"),
+                                             (frame.shape[1], frame.shape[0]))
+                except Exception:
+                    log.exception("live publish: could not queue result")
 
 
-def make_handler(analyzer_factory, result_type: str = "result", events_fn: EventsFn | None = None):
+def make_handler(analyzer_factory, result_type: str = "result", events_fn: EventsFn | None = None,
+                 *, forwarder_factory=None, publisher_factory=None):
     async def handler(ws):
         peer = ws.remote_address
         log.info("client connected: %s (loading model...)", peer)
@@ -170,7 +204,9 @@ def make_handler(analyzer_factory, result_type: str = "result", events_fn: Event
             await ws.send(json.dumps({"type": "error", "error": f"model failed to load: {e!r}"}))
             return
         log.info("model ready for %s", peer)
-        conn = Connection(ws, analyzer, result_type, events_fn)
+        forwarder = forwarder_factory() if forwarder_factory else None
+        conn = Connection(ws, analyzer, result_type, events_fn, forwarder=forwarder,
+                          publisher=publisher_factory(forwarder) if publisher_factory else None)
         worker = asyncio.create_task(conn.process_loop())
         try:
             await conn.receive_loop()
@@ -196,8 +232,11 @@ def lan_ip() -> str:
 
 
 async def serve(host: str, port: int, analyzer_factory, result_type: str = "result",
-                events_fn: EventsFn | None = None, name: str = "server"):
-    async with websockets.serve(make_handler(analyzer_factory, result_type, events_fn),
+                events_fn: EventsFn | None = None, name: str = "server", forwarder_factory=None,
+                publisher_factory=None):
+    async with websockets.serve(make_handler(analyzer_factory, result_type, events_fn,
+                                             forwarder_factory=forwarder_factory,
+                                             publisher_factory=publisher_factory),
                                 host, port, max_size=8 * 1024 * 1024):
         log.info("%s listening on ws://%s:%d  (iPhone: ws://%s:%d)",
                  name, host, port, lan_ip(), port)
