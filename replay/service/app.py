@@ -1,7 +1,9 @@
 """FastAPI service: ingest frames, call fal, post-process, serve bundles.
 
-    uv run uvicorn service.app:app --port 8000                                          # real fal
-    REPLAY_MOCK_FAL=data/fal_out/synthetic uv run uvicorn service.app:app --port 8000   # offline
+    uv run uvicorn service.app:app --port 8017                                          # real fal
+    REPLAY_MOCK_FAL=data/fal_out/synthetic uv run uvicorn service.app:app --port 8017   # offline
+
+Ports: 8017 (8000 is often taken; posecam uses 8765 pose / 8766 eyes).
 
 Routes (REPLAY_SPEC.md "Interfaces"):
     POST /replay/{trialId}/frame     multipart: jpeg, mask?, t, crop, frame_size, kind, gravity?

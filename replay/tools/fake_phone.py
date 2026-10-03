@@ -72,7 +72,7 @@ def main(a: argparse.Namespace) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("run_dir", type=Path, nargs="?", default=REPLAY_ROOT / "data/fal_out/synthetic")
-    p.add_argument("--url", default="http://localhost:8000")
+    p.add_argument("--url", default="http://localhost:8017")
     p.add_argument("--trial", default=None)
     p.add_argument("--speed", type=float, default=1.0)
     p.add_argument("--height-cm", type=float, default=None)
