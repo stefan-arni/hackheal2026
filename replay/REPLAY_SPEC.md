@@ -1,5 +1,7 @@
 # Instant Replay — SAM 3D Body lane
 
+> **Branching:** replay work lives on the `replay` branch, not `main`. When merging replay into main, revert the revert commit first, or the replay files won't come back. (The revert on main is `f99daf4`: run `git revert f99daf4` on the merge branch, then merge.)
+
 Owner: Stefan . Lives in `/replay`. Everything here runs **in the background** and must never block the core product (MediaPipe + optical flow sway metrics, error counts, convergence). If this lane fails, the core still works.
 
 ## What it is
