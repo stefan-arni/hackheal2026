@@ -1,0 +1,1907 @@
+import SwiftUI
+import AVFoundation
+import Combine
+import MediaPipeTasksVision
+import UIKit
+import ImageIO
+
+
+// ============================================================
+// MARK: - Content View
+// ============================================================
+
+struct ContentView: View {
+
+    @StateObject private var camera = CameraManager()
+
+    var body: some View {
+
+        ZStack {
+
+            CameraPreview(camera: camera)
+                .ignoresSafeArea()
+
+            VStack {
+
+                Text(camera.status)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.75))
+                    .clipShape(Capsule())
+
+                Spacer()
+
+                VStack(spacing: 8) {
+
+                    Text("REAR LiDAR")
+                        .font(.headline)
+
+                    if let distance = camera.indexDistanceCM {
+
+                        Text(
+                            String(
+                                format: "%.1f cm",
+                                distance
+                            )
+                        )
+                        .font(
+                            .system(
+                                size: 36,
+                                weight: .bold,
+                                design: .rounded
+                            )
+                        )
+                        .monospacedDigit()
+
+                    } else {
+
+                        Text("-- cm")
+                            .font(
+                                .system(
+                                    size: 36,
+                                    weight: .bold,
+                                    design: .rounded
+                                )
+                            )
+                            .monospacedDigit()
+                    }
+
+                    Text("Index fingertip")
+                        .font(.caption)
+                }
+                .foregroundStyle(.white)
+                .padding(18)
+                .background(.black.opacity(0.78))
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: 18
+                    )
+                )
+                .padding(.bottom, 25)
+            }
+            .padding()
+        }
+        .onAppear {
+            camera.start()
+        }
+    }
+}
+
+
+// ============================================================
+// MARK: - SwiftUI Camera Preview
+// ============================================================
+
+struct CameraPreview: UIViewRepresentable {
+
+    @ObservedObject var camera: CameraManager
+
+    func makeUIView(
+        context: Context
+    ) -> HandPreviewView {
+
+        let view = HandPreviewView()
+
+        view.previewLayer.session =
+            camera.session
+
+        view.previewLayer.videoGravity =
+            .resizeAspectFill
+
+        return view
+    }
+
+    func updateUIView(
+        _ uiView: HandPreviewView,
+        context: Context
+    ) {
+
+        uiView.updateLandmarks(
+            camera.landmarks,
+            indexDistance:
+                camera.indexDistanceCM
+        )
+    }
+}
+
+
+// ============================================================
+// MARK: - Preview + MediaPipe Overlay
+// ============================================================
+
+final class HandPreviewView: UIView {
+
+    override class var layerClass: AnyClass {
+        AVCaptureVideoPreviewLayer.self
+    }
+
+    var previewLayer: AVCaptureVideoPreviewLayer {
+        layer as! AVCaptureVideoPreviewLayer
+    }
+
+    private var landmarkLayers:
+        [CAShapeLayer] = []
+
+    private var connectionLayers:
+        [CAShapeLayer] = []
+
+    private let indexLabel =
+        CATextLayer()
+
+
+    private let connections: [(Int, Int)] = [
+
+        // Thumb
+        (0,1),
+        (1,2),
+        (2,3),
+        (3,4),
+
+        // Index
+        (0,5),
+        (5,6),
+        (6,7),
+        (7,8),
+
+        // Middle
+        (5,9),
+        (9,10),
+        (10,11),
+        (11,12),
+
+        // Ring
+        (9,13),
+        (13,14),
+        (14,15),
+        (15,16),
+
+        // Pinky
+        (13,17),
+        (17,18),
+        (18,19),
+        (19,20),
+
+        // Palm
+        (0,17)
+    ]
+
+
+    override init(frame: CGRect) {
+
+        super.init(frame: frame)
+
+        setupOverlay()
+    }
+
+
+    required init?(coder: NSCoder) {
+
+        super.init(coder: coder)
+
+        setupOverlay()
+    }
+
+
+    private func setupOverlay() {
+
+        // ----------------------------------------------------
+        // Hand skeleton
+        // ----------------------------------------------------
+
+        for _ in connections {
+
+            let line =
+                CAShapeLayer()
+
+            line.strokeColor =
+                UIColor.systemGreen.cgColor
+
+            line.fillColor =
+                UIColor.clear.cgColor
+
+            line.lineWidth =
+                3
+
+            layer.addSublayer(
+                line
+            )
+
+            connectionLayers.append(
+                line
+            )
+        }
+
+
+        // ----------------------------------------------------
+        // 21 landmarks
+        // ----------------------------------------------------
+
+        for index in 0..<21 {
+
+            let point =
+                CAShapeLayer()
+
+            if index == 8 {
+
+                // Index fingertip
+                point.fillColor =
+                    UIColor.systemRed.cgColor
+
+            } else {
+
+                point.fillColor =
+                    UIColor.systemGreen.cgColor
+            }
+
+            layer.addSublayer(
+                point
+            )
+
+            landmarkLayers.append(
+                point
+            )
+        }
+
+
+        // ----------------------------------------------------
+        // Index depth label
+        // ----------------------------------------------------
+
+        indexLabel.contentsScale =
+            UIScreen.main.scale
+
+        indexLabel.fontSize =
+            16
+
+        indexLabel.foregroundColor =
+            UIColor.white.cgColor
+
+        indexLabel.backgroundColor =
+            UIColor.black
+                .withAlphaComponent(0.75)
+                .cgColor
+
+        indexLabel.cornerRadius =
+            7
+
+        indexLabel.alignmentMode =
+            .center
+
+        indexLabel.isHidden =
+            true
+
+        layer.addSublayer(
+            indexLabel
+        )
+    }
+
+
+    func updateLandmarks(
+        _ landmarks: [CGPoint],
+        indexDistance: Float?
+    ) {
+
+        guard landmarks.count == 21
+        else {
+
+            hideEverything()
+
+            return
+        }
+
+
+        // ====================================================
+        // Convert MediaPipe normalized points to preview
+        // coordinates.
+        //
+        // This is the same approach that worked for your
+        // previous hand-tracking version.
+        // ====================================================
+
+        let converted =
+            landmarks.map { point in
+
+                previewLayer
+                    .layerPointConverted(
+                        fromCaptureDevicePoint:
+                            point
+                    )
+            }
+
+
+        // ----------------------------------------------------
+        // Draw skeleton
+        // ----------------------------------------------------
+
+        for (
+            index,
+            connection
+        ) in connections.enumerated() {
+
+            let start =
+                converted[
+                    connection.0
+                ]
+
+            let end =
+                converted[
+                    connection.1
+                ]
+
+
+            let path =
+                UIBezierPath()
+
+            path.move(
+                to: start
+            )
+
+            path.addLine(
+                to: end
+            )
+
+
+            connectionLayers[index].path =
+                path.cgPath
+
+            connectionLayers[index].isHidden =
+                false
+        }
+
+
+        // ----------------------------------------------------
+        // Draw landmarks
+        // ----------------------------------------------------
+
+        for index in 0..<21 {
+
+            let position =
+                converted[index]
+
+
+            let radius: CGFloat =
+                index == 8
+                ? 10
+                : 5
+
+
+            let rect =
+                CGRect(
+                    x:
+                        position.x -
+                        radius,
+
+                    y:
+                        position.y -
+                        radius,
+
+                    width:
+                        radius * 2,
+
+                    height:
+                        radius * 2
+                )
+
+
+            landmarkLayers[index].path =
+                UIBezierPath(
+                    ovalIn:
+                        rect
+                ).cgPath
+
+
+            landmarkLayers[index].isHidden =
+                false
+        }
+
+
+        // ----------------------------------------------------
+        // Index-finger depth label
+        // ----------------------------------------------------
+
+        let indexPosition =
+            converted[8]
+
+
+        if let cm =
+            indexDistance {
+
+            indexLabel.string =
+                String(
+                    format:
+                        "%.1f cm",
+                    cm
+                )
+
+        } else {
+
+            indexLabel.string =
+                "-- cm"
+        }
+
+
+        indexLabel.frame =
+            CGRect(
+                x:
+                    indexPosition.x -
+                    45,
+
+                y:
+                    indexPosition.y -
+                    48,
+
+                width:
+                    90,
+
+                height:
+                    26
+            )
+
+
+        indexLabel.isHidden =
+            false
+    }
+
+
+    private func hideEverything() {
+
+        landmarkLayers.forEach {
+            $0.isHidden = true
+        }
+
+        connectionLayers.forEach {
+            $0.isHidden = true
+        }
+
+        indexLabel.isHidden =
+            true
+    }
+}
+
+
+// ============================================================
+// MARK: - Camera Manager
+// ============================================================
+
+final class CameraManager:
+    NSObject,
+    ObservableObject,
+    AVCaptureDataOutputSynchronizerDelegate,
+    HandLandmarkerLiveStreamDelegate {
+
+
+    // ========================================================
+    // MARK: Published UI Data
+    // ========================================================
+
+    @Published var landmarks:
+        [CGPoint] = []
+
+    @Published var indexDistanceCM:
+        Float?
+
+    @Published var status =
+        "Starting rear LiDAR..."
+
+
+    // ========================================================
+    // MARK: AVFoundation
+    // ========================================================
+
+    let session =
+        AVCaptureSession()
+
+
+    private let videoOutput =
+        AVCaptureVideoDataOutput()
+
+
+    private let depthOutput =
+        AVCaptureDepthDataOutput()
+
+
+    private var synchronizer:
+        AVCaptureDataOutputSynchronizer?
+
+
+    private let cameraQueue =
+        DispatchQueue(
+            label:
+                "TeleVision.RearLiDAR"
+        )
+
+
+    private var configured =
+        false
+
+
+    // ========================================================
+    // MARK: MediaPipe
+    // ========================================================
+
+    private var handLandmarker:
+        HandLandmarker?
+
+
+    private var lastTimestamp =
+        0
+
+
+    // ========================================================
+    // MARK: Timestamped Depth Storage
+    // ========================================================
+
+    /*
+     MediaPipe is asynchronous.
+
+     Therefore we cannot simply use "latestDepthMap".
+
+     We store every synchronized depth frame under the
+     exact timestamp sent to MediaPipe.
+    */
+
+    private var depthFrames:
+        [Int: CVPixelBuffer] = [:]
+
+
+    private let depthLock =
+        NSLock()
+
+
+    private let maxDepthFrames =
+        30
+
+
+    // ========================================================
+    // MARK: ORIENTATION FIX
+    // ========================================================
+
+    /*
+     MPImage expects UIImage.Orientation.
+
+     AVDepthData.applyingExifOrientation expects
+     CGImagePropertyOrientation.
+
+     They are DIFFERENT Swift types.
+
+     For portrait REAR camera:
+
+         MediaPipe = .right
+         Depth     = .right
+
+     Same physical orientation, different enum types.
+    */
+
+    private let mediaPipeOrientation:
+        UIImage.Orientation =
+        .right
+
+
+    private let depthOrientation:
+        CGImagePropertyOrientation =
+        .right
+
+
+    // ========================================================
+    // MARK: Start
+    // ========================================================
+
+    func start() {
+
+        setupMediaPipe()
+
+
+        switch AVCaptureDevice
+            .authorizationStatus(
+                for: .video
+            ) {
+
+        case .authorized:
+
+            setupCamera()
+
+
+        case .notDetermined:
+
+            AVCaptureDevice
+                .requestAccess(
+                    for: .video
+                ) {
+                    [weak self]
+                    granted in
+
+
+                    guard let self
+                    else {
+                        return
+                    }
+
+
+                    if granted {
+
+                        self.setupCamera()
+
+                    } else {
+
+                        DispatchQueue
+                            .main
+                            .async {
+
+                                self.status =
+                                    "Camera permission denied"
+                            }
+                    }
+                }
+
+
+        case .denied,
+             .restricted:
+
+            DispatchQueue
+                .main
+                .async {
+
+                    self.status =
+                        "Camera permission denied"
+                }
+
+
+        @unknown default:
+
+            break
+        }
+    }
+
+
+    // ========================================================
+    // MARK: MediaPipe Setup
+    // ========================================================
+
+    private func setupMediaPipe() {
+
+        guard handLandmarker == nil
+        else {
+            return
+        }
+
+
+        guard let modelPath =
+            Bundle.main.path(
+                forResource:
+                    "hand_landmarker",
+
+                ofType:
+                    "task"
+            )
+        else {
+
+            DispatchQueue
+                .main
+                .async {
+
+                    self.status =
+                        "hand_landmarker.task missing"
+                }
+
+            return
+        }
+
+
+        let options =
+            HandLandmarkerOptions()
+
+
+        options
+            .baseOptions
+            .modelAssetPath =
+            modelPath
+
+
+        options.runningMode =
+            .liveStream
+
+
+        options.numHands =
+            1
+
+
+        options
+            .minHandDetectionConfidence =
+            0.5
+
+
+        options
+            .minHandPresenceConfidence =
+            0.5
+
+
+        options
+            .minTrackingConfidence =
+            0.5
+
+
+        options
+            .handLandmarkerLiveStreamDelegate =
+            self
+
+
+        do {
+
+            handLandmarker =
+                try HandLandmarker(
+                    options:
+                        options
+                )
+
+        } catch {
+
+            print(
+                "MediaPipe setup error:",
+                error
+            )
+
+
+            DispatchQueue
+                .main
+                .async {
+
+                    self.status =
+                        "MediaPipe failed"
+                }
+        }
+    }
+
+
+    // ========================================================
+    // MARK: Rear LiDAR Setup
+    // ========================================================
+
+    private func setupCamera() {
+
+        cameraQueue.async {
+            [weak self] in
+
+
+            guard let self
+            else {
+                return
+            }
+
+
+            guard !configured
+            else {
+                return
+            }
+
+
+            configured =
+                true
+
+
+            session.beginConfiguration()
+
+
+            session.sessionPreset =
+                .inputPriority
+
+
+            // =================================================
+            // iPhone rear LiDAR depth camera
+            // =================================================
+
+            guard let camera =
+                AVCaptureDevice.default(
+                    .builtInLiDARDepthCamera,
+
+                    for:
+                        .video,
+
+                    position:
+                        .back
+                )
+            else {
+
+                session.commitConfiguration()
+
+
+                DispatchQueue
+                    .main
+                    .async {
+
+                        self.status =
+                            "Rear LiDAR unavailable"
+                    }
+
+                return
+            }
+
+
+            do {
+
+                // =================================================
+                // Find compatible RGB + LiDAR format
+                // =================================================
+
+                guard let pair =
+                    findBestLiDARFormat(
+                        camera:
+                            camera
+                    )
+                else {
+
+                    throw CameraError.noDepth
+                }
+
+
+                try camera
+                    .lockForConfiguration()
+
+
+                camera.activeFormat =
+                    pair.video
+
+
+                camera.activeDepthDataFormat =
+                    pair.depth
+
+
+                camera.unlockForConfiguration()
+
+
+                // =================================================
+                // Camera input
+                // =================================================
+
+                let input =
+                    try AVCaptureDeviceInput(
+                        device:
+                            camera
+                    )
+
+
+                guard session
+                    .canAddInput(
+                        input
+                    )
+                else {
+
+                    throw CameraError.setup
+                }
+
+
+                session.addInput(
+                    input
+                )
+
+
+                // =================================================
+                // RGB video output
+                // =================================================
+
+                videoOutput.videoSettings = [
+
+                    kCVPixelBufferPixelFormatTypeKey
+                        as String:
+
+                        kCVPixelFormatType_32BGRA
+                ]
+
+
+                videoOutput
+                    .alwaysDiscardsLateVideoFrames =
+                    true
+
+
+                guard session
+                    .canAddOutput(
+                        videoOutput
+                    )
+                else {
+
+                    throw CameraError.setup
+                }
+
+
+                session.addOutput(
+                    videoOutput
+                )
+
+
+                // =================================================
+                // LiDAR depth output
+                // =================================================
+
+                depthOutput
+                    .isFilteringEnabled =
+                    true
+
+
+                depthOutput
+                    .alwaysDiscardsLateDepthData =
+                    true
+
+
+                guard session
+                    .canAddOutput(
+                        depthOutput
+                    )
+                else {
+
+                    throw CameraError.noDepth
+                }
+
+
+                session.addOutput(
+                    depthOutput
+                )
+
+
+                guard let depthConnection =
+                    depthOutput
+                        .connection(
+                            with:
+                                .depthData
+                        )
+                else {
+
+                    throw CameraError.noDepth
+                }
+
+
+                depthConnection.isEnabled =
+                    true
+
+
+                // =================================================
+                // Synchronize RGB + LiDAR
+                // =================================================
+
+                synchronizer =
+                    AVCaptureDataOutputSynchronizer(
+                        dataOutputs: [
+
+                            videoOutput,
+
+                            depthOutput
+                        ]
+                    )
+
+
+                synchronizer?
+                    .setDelegate(
+                        self,
+
+                        queue:
+                            cameraQueue
+                    )
+
+
+                session.commitConfiguration()
+
+
+                session.startRunning()
+
+
+                DispatchQueue
+                    .main
+                    .async {
+
+                        self.status =
+                            "Rear LiDAR ready"
+                    }
+
+
+            } catch {
+
+                session.commitConfiguration()
+
+
+                print(
+                    "Rear LiDAR setup error:",
+                    error
+                )
+
+
+                DispatchQueue
+                    .main
+                    .async {
+
+                        self.status =
+                            "Rear LiDAR setup failed"
+                    }
+            }
+        }
+    }
+
+
+    // ========================================================
+    // MARK: Find Best LiDAR Format
+    // ========================================================
+
+    private func findBestLiDARFormat(
+        camera:
+            AVCaptureDevice
+    ) -> (
+        video:
+            AVCaptureDevice.Format,
+
+        depth:
+            AVCaptureDevice.Format
+    )? {
+
+
+        var bestVideo:
+            AVCaptureDevice.Format?
+
+
+        var bestDepth:
+            AVCaptureDevice.Format?
+
+
+        var bestPixelCount:
+            Int32 = 0
+
+
+        for videoFormat
+            in camera.formats {
+
+
+            for depthFormat
+                in videoFormat
+                    .supportedDepthDataFormats {
+
+
+                let subtype =
+                    CMFormatDescriptionGetMediaSubType(
+                        depthFormat
+                            .formatDescription
+                    )
+
+
+                guard subtype ==
+                    kCVPixelFormatType_DepthFloat32
+                else {
+
+                    continue
+                }
+
+
+                let dimensions =
+                    CMVideoFormatDescriptionGetDimensions(
+                        depthFormat
+                            .formatDescription
+                    )
+
+
+                let pixelCount =
+                    dimensions.width *
+                    dimensions.height
+
+
+                if pixelCount >
+                    bestPixelCount {
+
+
+                    bestPixelCount =
+                        pixelCount
+
+
+                    bestVideo =
+                        videoFormat
+
+
+                    bestDepth =
+                        depthFormat
+                }
+            }
+        }
+
+
+        guard
+            let bestVideo,
+            let bestDepth
+        else {
+
+            return nil
+        }
+
+
+        return (
+            video:
+                bestVideo,
+
+            depth:
+                bestDepth
+        )
+    }
+
+
+    // ========================================================
+    // MARK: Synchronized RGB + LiDAR Frames
+    // ========================================================
+
+    func dataOutputSynchronizer(
+        _ synchronizer:
+            AVCaptureDataOutputSynchronizer,
+
+        didOutput collection:
+            AVCaptureSynchronizedDataCollection
+    ) {
+
+
+        // ----------------------------------------------------
+        // RGB
+        // ----------------------------------------------------
+
+        guard let videoData =
+            collection
+                .synchronizedData(
+                    for:
+                        videoOutput
+                )
+                as?
+                AVCaptureSynchronizedSampleBufferData,
+
+              !videoData
+                .sampleBufferWasDropped
+        else {
+
+            return
+        }
+
+
+        // ----------------------------------------------------
+        // LiDAR
+        // ----------------------------------------------------
+
+        guard let depthData =
+            collection
+                .synchronizedData(
+                    for:
+                        depthOutput
+                )
+                as?
+                AVCaptureSynchronizedDepthData,
+
+              !depthData
+                .depthDataWasDropped
+        else {
+
+            return
+        }
+
+
+        let sampleBuffer =
+            videoData.sampleBuffer
+
+
+        // ====================================================
+        // Timestamp
+        // ====================================================
+
+        let presentationTime =
+            CMSampleBufferGetPresentationTimeStamp(
+                sampleBuffer
+            )
+
+
+        var timestamp =
+            Int(
+                CMTimeGetSeconds(
+                    presentationTime
+                )
+                * 1000
+            )
+
+
+        if timestamp <=
+            lastTimestamp {
+
+            timestamp =
+                lastTimestamp + 1
+        }
+
+
+        lastTimestamp =
+            timestamp
+
+
+        // ====================================================
+        // LiDAR orientation
+        //
+        // FIX:
+        // CGImagePropertyOrientation
+        // ====================================================
+
+        let orientedDepth =
+            depthData
+                .depthData
+                .applyingExifOrientation(
+                    depthOrientation
+                )
+                .converting(
+                    toDepthDataType:
+                        kCVPixelFormatType_DepthFloat32
+                )
+
+
+        let depthMap =
+            orientedDepth
+                .depthDataMap
+
+
+        // ====================================================
+        // Store matching depth frame
+        // ====================================================
+
+        storeDepthFrame(
+            depthMap,
+
+            timestamp:
+                timestamp
+        )
+
+
+        // ====================================================
+        // MediaPipe orientation
+        //
+        // FIX:
+        // UIImage.Orientation
+        // ====================================================
+
+        guard let image =
+            try? MPImage(
+                sampleBuffer:
+                    sampleBuffer,
+
+                orientation:
+                    mediaPipeOrientation
+            )
+        else {
+
+            removeDepthFrame(
+                timestamp:
+                    timestamp
+            )
+
+            return
+        }
+
+
+        // ====================================================
+        // Run MediaPipe
+        // ====================================================
+
+        do {
+
+            try handLandmarker?
+                .detectAsync(
+                    image:
+                        image,
+
+                    timestampInMilliseconds:
+                        timestamp
+                )
+
+        } catch {
+
+            removeDepthFrame(
+                timestamp:
+                    timestamp
+            )
+
+
+            print(
+                "MediaPipe detection error:",
+                error
+            )
+        }
+    }
+
+
+    // ========================================================
+    // MARK: Store Depth by Timestamp
+    // ========================================================
+
+    private func storeDepthFrame(
+        _ buffer:
+            CVPixelBuffer,
+
+        timestamp:
+            Int
+    ) {
+
+        depthLock.lock()
+
+
+        depthFrames[timestamp] =
+            buffer
+
+
+        if depthFrames.count >
+            maxDepthFrames {
+
+
+            let keys =
+                depthFrames
+                    .keys
+                    .sorted()
+
+
+            let removeCount =
+                depthFrames.count -
+                maxDepthFrames
+
+
+            for key
+                in keys.prefix(
+                    removeCount
+                ) {
+
+
+                depthFrames
+                    .removeValue(
+                        forKey:
+                            key
+                    )
+            }
+        }
+
+
+        depthLock.unlock()
+    }
+
+
+    private func takeDepthFrame(
+        timestamp:
+            Int
+    ) -> CVPixelBuffer? {
+
+        depthLock.lock()
+
+
+        let buffer =
+            depthFrames
+                .removeValue(
+                    forKey:
+                        timestamp
+                )
+
+
+        /*
+         MediaPipe may drop frames.
+
+         Anything older than the result we just received
+         can be discarded.
+        */
+
+        let oldKeys =
+            depthFrames
+                .keys
+                .filter {
+
+                    $0 <
+                    timestamp
+                }
+
+
+        for key
+            in oldKeys {
+
+
+            depthFrames
+                .removeValue(
+                    forKey:
+                        key
+                )
+        }
+
+
+        depthLock.unlock()
+
+
+        return buffer
+    }
+
+
+    private func removeDepthFrame(
+        timestamp:
+            Int
+    ) {
+
+        depthLock.lock()
+
+
+        depthFrames
+            .removeValue(
+                forKey:
+                    timestamp
+            )
+
+
+        depthLock.unlock()
+    }
+
+
+    // ========================================================
+    // MARK: MediaPipe Callback
+    // ========================================================
+
+    func handLandmarker(
+        _ handLandmarker:
+            HandLandmarker,
+
+        didFinishDetection result:
+            HandLandmarkerResult?,
+
+        timestampInMilliseconds:
+            Int,
+
+        error:
+            Error?
+    ) {
+
+
+        // ====================================================
+        // Exact matching LiDAR frame
+        // ====================================================
+
+        let depthMap =
+            takeDepthFrame(
+                timestamp:
+                    timestampInMilliseconds
+            )
+
+
+        if let error {
+
+            print(
+                "MediaPipe callback error:",
+                error
+            )
+
+            return
+        }
+
+
+        // ====================================================
+        // Hand
+        // ====================================================
+
+        guard
+            let result,
+
+            let hand =
+                result
+                    .landmarks
+                    .first,
+
+            hand.count ==
+                21
+        else {
+
+            DispatchQueue
+                .main
+                .async {
+
+                    self.landmarks =
+                        []
+
+                    self.indexDistanceCM =
+                        nil
+
+                    self.status =
+                        "Show your hand"
+                }
+
+            return
+        }
+
+
+        // ====================================================
+        // Convert MediaPipe landmarks
+        // ====================================================
+
+        let points:
+            [CGPoint] =
+            hand.map {
+
+
+                CGPoint(
+                    x:
+                        CGFloat(
+                            $0.x
+                        ),
+
+                    y:
+                        CGFloat(
+                            $0.y
+                        )
+                )
+            }
+
+
+        // ====================================================
+        // Index fingertip = #8
+        // ====================================================
+
+        let indexPoint =
+            points[8]
+
+
+        var centimeters:
+            Float?
+
+
+        if let depthMap {
+
+
+            if let meters =
+                sampleDepth(
+                    depthMap:
+                        depthMap,
+
+                    point:
+                        indexPoint
+                ) {
+
+
+                centimeters =
+                    meters *
+                    100.0
+            }
+        }
+
+
+        // ====================================================
+        // UI
+        // ====================================================
+
+        DispatchQueue
+            .main
+            .async {
+
+
+                self.landmarks =
+                    points
+
+
+                self.indexDistanceCM =
+                    centimeters
+
+
+                if centimeters != nil {
+
+                    self.status =
+                        "Tracking rear LiDAR"
+
+                } else {
+
+                    self.status =
+                        "Hand found — no LiDAR value"
+                }
+            }
+    }
+
+
+    // ========================================================
+    // MARK: Sample Depth at Index Finger
+    // ========================================================
+
+    private func sampleDepth(
+        depthMap:
+            CVPixelBuffer,
+
+        point:
+            CGPoint
+    ) -> Float? {
+
+
+        let width =
+            CVPixelBufferGetWidth(
+                depthMap
+            )
+
+
+        let height =
+            CVPixelBufferGetHeight(
+                depthMap
+            )
+
+
+        guard
+            width > 0,
+            height > 0
+        else {
+
+            return nil
+        }
+
+
+        // ====================================================
+        // Normalized MediaPipe coordinate
+        // ====================================================
+
+        let normalizedX =
+            min(
+                max(
+                    point.x,
+                    0.0
+                ),
+                1.0
+            )
+
+
+        let normalizedY =
+            min(
+                max(
+                    point.y,
+                    0.0
+                ),
+                1.0
+            )
+
+
+        let centerX =
+            min(
+                width - 1,
+
+                max(
+                    0,
+
+                    Int(
+                        normalizedX *
+                        CGFloat(
+                            width - 1
+                        )
+                    )
+                )
+            )
+
+
+        let centerY =
+            min(
+                height - 1,
+
+                max(
+                    0,
+
+                    Int(
+                        normalizedY *
+                        CGFloat(
+                            height - 1
+                        )
+                    )
+                )
+            )
+
+
+        // ====================================================
+        // Lock Float32 depth map
+        // ====================================================
+
+        CVPixelBufferLockBaseAddress(
+            depthMap,
+            .readOnly
+        )
+
+
+        defer {
+
+            CVPixelBufferUnlockBaseAddress(
+                depthMap,
+                .readOnly
+            )
+        }
+
+
+        guard let base =
+            CVPixelBufferGetBaseAddress(
+                depthMap
+            )
+        else {
+
+            return nil
+        }
+
+
+        let bytesPerRow =
+            CVPixelBufferGetBytesPerRow(
+                depthMap
+            )
+
+
+        // ====================================================
+        // Sample small 5x5 patch
+        // ====================================================
+
+        let radius =
+            2
+
+
+        let startX =
+            max(
+                0,
+                centerX - radius
+            )
+
+
+        let endX =
+            min(
+                width - 1,
+                centerX + radius
+            )
+
+
+        let startY =
+            max(
+                0,
+                centerY - radius
+            )
+
+
+        let endY =
+            min(
+                height - 1,
+                centerY + radius
+            )
+
+
+        var values:
+            [Float] = []
+
+
+        for y in startY...endY {
+
+
+            let row =
+                base
+                    .advanced(
+                        by:
+                            y *
+                            bytesPerRow
+                    )
+                    .assumingMemoryBound(
+                        to:
+                            Float.self
+                    )
+
+
+            for x in startX...endX {
+
+
+                let depth =
+                    row[x]
+
+
+                /*
+                 DepthFloat32 is METERS.
+
+                 Examples:
+
+                 0.25 = 25 cm
+                 0.50 = 50 cm
+                 1.00 = 100 cm
+                */
+
+                if
+                    depth.isFinite &&
+                    depth > 0.05 &&
+                    depth < 5.0 {
+
+
+                    values.append(
+                        depth
+                    )
+                }
+            }
+        }
+
+
+        guard !values.isEmpty
+        else {
+
+            return nil
+        }
+
+
+        // ====================================================
+        // Sort near -> far
+        // ====================================================
+
+        values.sort()
+
+
+        /*
+         Fingertip boundaries can contain both:
+
+             finger depth
+             background depth
+
+         Use the 25th percentile rather than average.
+
+         This favors the foreground object without trusting
+         a single potentially noisy minimum pixel.
+        */
+
+        let selectedIndex =
+            Int(
+                Double(
+                    values.count - 1
+                )
+                * 0.25
+            )
+
+
+        return values[
+            selectedIndex
+        ]
+    }
+
+
+    // ========================================================
+    // MARK: Errors
+    // ========================================================
+
+    private enum CameraError:
+        LocalizedError {
+
+
+        case setup
+
+        case noDepth
+
+
+        var errorDescription:
+            String? {
+
+
+            switch self {
+
+
+            case .setup:
+
+                return
+                    "Camera setup failed"
+
+
+            case .noDepth:
+
+                return
+                    "LiDAR depth unavailable"
+            }
+        }
+    }
+}
+
+
+// ============================================================
+// MARK: Preview
+// ============================================================
+
+#Preview {
+
+    ContentView()
+}
