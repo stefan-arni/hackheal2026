@@ -36,7 +36,8 @@ while [[ $# -gt 0 ]]; do
   esac; shift
 done
 
-LOGS="${REPLAY}/data/logs"; mkdir -p "${LOGS}"
+command -v uv >/dev/null 2>&1 || { echo "uv is not installed. Install it with:  curl -LsSf https://astral.sh/uv/install.sh | sh   (or: brew install uv), then open a new terminal." >&2; exit 1; }
+LOGS="${REPLAY}/data/logs"; mkdir -p "${LOGS}" "${REPLAY}/data/fal_cache" "${REPLAY}/data/trials"  # fresh clone: data/ is gitignored
 PIDS=()
 cleanup() { trap - INT TERM EXIT; echo; echo "stopping…"; for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; wait 2>/dev/null || true; }
 trap cleanup INT TERM EXIT
