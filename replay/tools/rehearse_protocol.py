@@ -19,6 +19,14 @@ and ankle height difference per frame; the single-leg window must contain the cl
 step-down. Between trials the clip's longest planted stretch loops (ping-pong) so the live
 skeleton keeps moving.
 
+Live camera (Plan B, no iOS code): --camera streams a macOS camera instead of the clip, e.g. an
+iPhone as Continuity Camera. --list-cameras shows the devices; --camera auto prefers an iPhone.
+--rotate 90 / 270 for a phone mounted in portrait; each trial starts on Enter (--trigger key) or
+on a timer (--trigger timer: first trial after --first-delay, then --gap after each trial ends).
+
+    uv run tools/rehearse_protocol.py --list-cameras
+    uv run tools/rehearse_protocol.py --session <id> --camera auto --rotate 90 --trigger key
+
 Afterwards it waits for every trial's final replay (full or deadline, plus straggler updates up
 to --settle s) and prints the measured timeline from /session/{id}. With --shots it saves
 headless-Chrome screenshots of the dashboard at each stage (trial running, error replay,
@@ -31,7 +39,9 @@ import argparse
 import asyncio
 import base64
 import json
+import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -92,6 +102,109 @@ def decode(clip: Path, start: float, length: float, width: int) -> list[bytes]:
         i = b + 2
 
 
+# ------------------------------------------------------------------ live camera (macOS)
+
+def list_cameras() -> list[tuple[int, str]]:
+    """AVFoundation video devices as (index, name), via ffmpeg."""
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                         capture_output=True, text=True).stderr
+    devs, video = [], False
+    for line in out.splitlines():
+        if "AVFoundation video devices" in line:
+            video = True
+        elif "AVFoundation audio devices" in line:
+            video = False
+        elif video and (m := re.search(r"\[(\d+)\] (.+)$", line)):
+            devs.append((int(m.group(1)), m.group(2).strip()))
+    return devs
+
+
+def pick_camera(spec: str) -> tuple[int, str]:
+    devs = [d for d in list_cameras() if not d[1].startswith("Capture screen")]
+    if not devs:
+        raise SystemExit("no camera found (System Settings > Privacy & Security > Camera: allow your terminal)")
+    if spec == "auto":  # an iPhone (Continuity Camera) if present, never its Desk View
+        phones = [d for d in devs if "iphone" in d[1].lower() and "desk view" not in d[1].lower()]
+        return (phones or devs)[0]
+    if spec.isdigit():
+        return next((d for d in devs if d[0] == int(spec)), None) or sys.exit(f"no camera with index {spec}")
+    return next((d for d in devs if spec.lower() in d[1].lower()), None) or sys.exit(f"no camera matching {spec!r}")
+
+
+ROTATE = {0: [], 90: ["transpose=1"], 180: ["hflip", "vflip"], 270: ["transpose=2"]}
+
+
+class Camera:
+    """ffmpeg avfoundation -> MJPEG on a pipe; .latest() is the newest frame (older ones are dropped)."""
+
+    def __init__(self, index: int, rotate: int, width: int, fps: int = 30):
+        vf = ",".join(ROTATE[rotate] + [f"scale={width}:-2"])
+        self.cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-framerate", str(fps), "-pixel_format", "nv12",
+                    "-i", f"{index}:none", "-vf", vf, "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "-"]
+        self.frame: bytes | None = None
+        self.seq = 0
+        self.proc = None
+
+    async def run(self) -> None:
+        self.proc = await asyncio.create_subprocess_exec(*self.cmd, stdout=asyncio.subprocess.PIPE)
+        buf = b""
+        while chunk := await self.proc.stdout.read(1 << 16):
+            buf += chunk
+            while (a := buf.find(b"\xff\xd8")) >= 0 and (b := buf.find(b"\xff\xd9", a)) >= 0:
+                self.frame, self.seq = buf[a:b + 2], self.seq + 1
+                buf = buf[b + 2:]
+        raise RuntimeError("camera stream ended (camera permission? device busy?)")
+
+    def stop(self) -> None:
+        if self.proc and self.proc.returncode is None:
+            self.proc.kill()
+
+
+async def stream_camera(ws, cam: Camera, counter: dict) -> None:
+    """Send every new camera frame to posecam with the laptop's clock as timestamp_ms."""
+    last = 0
+    while True:
+        if cam.seq != last and cam.frame is not None:
+            last = cam.seq
+            counter["sent"] += 1
+            await ws.send(json.dumps({"type": "frame", "image": base64.b64encode(cam.frame).decode(),
+                                      "frame_id": counter["sent"], "timestamp_ms": round(time.time() * 1000, 1)}))
+        await asyncio.sleep(0.005)
+
+
+async def run_camera_protocol(ws, a, t0: float, trial_end: asyncio.Queue) -> int:
+    idx, name = pick_camera(a.camera)
+    print(f"camera [{idx}] {name}, rotate {a.rotate}°, {a.width} px wide")
+    cam = Camera(idx, a.rotate, a.width)
+    counter = {"sent": 0}
+    tasks = [asyncio.create_task(cam.run()), asyncio.create_task(stream_camera(ws, cam, counter))]
+    loop = asyncio.get_running_loop()
+    try:
+        for k, st in enumerate(STANCES):
+            if a.trigger == "key":
+                await loop.run_in_executor(None, input, f"\n>>> {st}: patient ready? press Enter to start ")
+            else:
+                wait = a.first_delay if k == 0 else a.gap
+                print(f"  next: {st} in {wait:.0f} s")
+                await asyncio.sleep(wait)
+            if any(t.done() for t in tasks):
+                for t in tasks:
+                    if t.done():
+                        t.result()  # raises the camera error
+            print(f"[{time.time() - t0:6.1f}s] bess_start {st} ({counter['sent']} frames so far)")
+            await ws.send(json.dumps({"type": "bess_start", "stance": st, "nondominant": a.nondominant}))
+            try:  # bess_done / failed / cancelled from posecam
+                await asyncio.wait_for(trial_end.get(), timeout=a.countdown + a.duration + 20)
+            except asyncio.TimeoutError:
+                print(f"  {st}: no result from posecam (whole body in frame?)")
+        await asyncio.sleep(2.0)
+    finally:
+        for t in tasks:
+            t.cancel()
+        cam.stop()
+    return counter["sent"]
+
+
 # ------------------------------------------------------------------ streaming
 
 class Streamer:
@@ -114,7 +227,7 @@ class Streamer:
         await self.frames([pingpong[k % len(pingpong)] for k in range(n)])
 
 
-async def listen(ws, log: list[dict], t0: float) -> None:
+async def listen(ws, log: list[dict], t0: float, trial_end: asyncio.Queue | None = None) -> None:
     async for raw in ws:
         if isinstance(raw, bytes):
             continue
@@ -125,6 +238,8 @@ async def listen(ws, log: list[dict], t0: float) -> None:
             k = m.get("kind") or m.get("command") or m.get("error")
             extra = {key: m[key] for key in ("stance", "errors", "foot", "label", "reason") if key in m}
             print(f"  [{time.time() - t0:6.1f}s] posecam {m['type']}: {k} {extra if extra else ''}")
+            if trial_end is not None and m.get("kind") in ("bess_done", "bess_failed", "bess_cancelled"):
+                trial_end.put_nowait(m)
 
 
 class Shots:
@@ -171,6 +286,12 @@ async def watch_stages(http: httpx.AsyncClient, sid: str, shots: Shots, stop: as
 
 
 async def main_async(a) -> None:
+    if a.list_cameras:
+        for i, n in list_cameras():
+            print(f"  [{i}] {n}")
+        return
+    if a.camera:
+        return await session_run(a, None, None, None, None, None)
     clip = a.clip or (REPLAY_ROOT / "data/protocol.mov" if (REPLAY_ROOT / "data/protocol.mov").exists()
                       else REPLAY_ROOT / "data/IMG_9691.mov")
     trial_len = a.countdown + a.duration
@@ -193,7 +314,13 @@ async def main_async(a) -> None:
     print(f"  {fps:.1f} fps, {a.width} px wide")
     if a.dry_run:
         return
+    await session_run(a, clip, segments, seg_frames if segments else None, idle if segments else whole, fps,
+                      starts=None if segments else starts)
 
+
+async def session_run(a, clip, segments, seg_frames, idle, fps, starts=None) -> None:
+    trial_len = a.countdown + a.duration
+    whole = idle
     http = httpx.AsyncClient(base_url=a.replay, timeout=10)
     sid = a.session or (await http.post("/session", json={"name": "rehearsal"})).json()["sessionId"]
     print(f"session {sid}\n  dashboard {a.replay}/dashboard/{sid}\n  report    {a.replay}/session/{sid}/report")
@@ -203,10 +330,13 @@ async def main_async(a) -> None:
 
     log: list[dict] = []
     t0 = time.time()
+    trial_end: asyncio.Queue = asyncio.Queue()
     async with websockets.connect(a.ws, max_size=None) as ws:
-        lt = asyncio.create_task(listen(ws, log, t0))
-        s = Streamer(ws, fps)
-        if segments:
+        lt = asyncio.create_task(listen(ws, log, t0, trial_end))
+        s = Streamer(ws, fps or 30.0)
+        if a.camera:
+            s.sent = await run_camera_protocol(ws, a, t0, trial_end)
+        elif segments:
             await s.idle(idle, 3.0)  # posecam sees a person before the first start
             for k, st in enumerate(STANCES):
                 print(f"[{time.time() - t0:6.1f}s] bess_start {st}")
@@ -265,12 +395,41 @@ async def main_async(a) -> None:
               f"{r['updates_s'] or ''}")
     total = sum(r["received"] or 0 for r in rows)
     print(f"total frames sent to the replay: {total}  →  live fal ≈ ${total * a.price:.2f} at ${a.price}/call")
-    out = {"session": sid, "clip": str(clip), "segments": segments, "trials": rows, "total_frames": total,
+    stats = fal_stats([r["trial"] for r in rows])
+    if stats:
+        print(f"fal: {stats['calls']} calls, latency p50 {stats['latency_p50_s']} s / p95 {stats['latency_p95_s']} s "
+              f"(min {stats['latency_min_s']} s); in flight {stats['in_flight_mean']} on average (max "
+              f"{stats['in_flight_max']}); {stats['throughput_fps']} frames/s → fal ran ≈ {stats['fal_parallel_est']} at once")
+    out = {"session": sid, "clip": str(clip), "camera": a.camera, "segments": segments, "fal": stats, "trials": rows, "total_frames": total,
            "price_per_call": a.price, "posecam_messages": [{k: v for k, v in m.items()} for m in log]}
     if a.shots:
         (a.shots / "timeline.json").write_text(json.dumps(out, indent=1, default=str))
         print(f"saved {a.shots / 'timeline.json'}")
     await http.aclose()
+
+
+def fal_stats(trial_ids: list[str]) -> dict | None:
+    """Latency and parallelism of the fal calls behind these trials (frame records of the service)."""
+    calls = []
+    for tid in trial_ids:
+        for p in (REPLAY_ROOT / "data/trials" / tid / "frames").glob("t*.json"):
+            r = json.loads(p.read_text())
+            if r.get("call_start_wall") and not r.get("from_cache"):
+                calls.append((r["call_start_wall"], r["call_end_wall"], r["latency_s"]))
+    if len(calls) < 3:
+        return None
+    lat = np.array([c[2] for c in calls])
+    starts, ends = np.array([c[0] for c in calls]), np.array([c[1] for c in calls])
+    grid = np.arange(starts.min(), ends.max(), 0.1)
+    inflight = ((grid[:, None] >= starts[None]) & (grid[:, None] < ends[None])).sum(axis=1)
+    busy = inflight > 0
+    thr = len(calls) / (busy.sum() * 0.1)  # frames per busy second
+    return {"calls": len(calls), "latency_p50_s": round(float(np.percentile(lat, 50)), 2),
+            "latency_p95_s": round(float(np.percentile(lat, 95)), 2), "latency_min_s": round(float(lat.min()), 2),
+            "in_flight_mean": round(float(inflight[busy].mean()), 2), "in_flight_max": int(inflight.max()),
+            "throughput_fps": round(float(thr), 3),
+            # Little's law with the fastest call as fal's own processing time: how many it really ran at once
+            "fal_parallel_est": round(float(thr * lat.min()), 2)}
 
 
 def main() -> None:
@@ -290,6 +449,11 @@ def main() -> None:
     p.add_argument("--price", type=float, default=0.018)
     p.add_argument("--shots", type=Path, help="save dashboard screenshots + timeline.json here")
     p.add_argument("--dry-run", action="store_true", help="only print the chosen segments")
+    p.add_argument("--list-cameras", action="store_true", help="list macOS camera devices and exit")
+    p.add_argument("--camera", help="live camera instead of the clip: auto (iPhone if present), an index, or a name")
+    p.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0, help="camera: rotate clockwise")
+    p.add_argument("--trigger", choices=["key", "timer"], default="key", help="camera: start trials on Enter or a timer")
+    p.add_argument("--first-delay", type=float, default=5.0, help="camera + timer: seconds before the first trial")
     asyncio.run(main_async(p.parse_args()))
 
 

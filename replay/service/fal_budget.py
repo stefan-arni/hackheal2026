@@ -5,6 +5,8 @@
 
 Rules:
   - hard stop at TOTAL_CAP calls ever and RUN_CAP per run, unless override=True
+  - optional session cap (max_session_calls): calls billed since this Budget was created,
+    including those in flight. Never overridable (e.g. "spend at most $1.20 on this demo")
   - until the price is confirmed, only PROBE_CALLS calls are allowed in total
     (the 3-frame probe); confirm with `tools/fal_budget.py confirm-price 0.015`
   - a batch prints "about to send N new frames ≈ $X, total so far $Y" and asks
@@ -52,12 +54,15 @@ class Budget:
         run_cap: int = RUN_CAP,
         override: bool = False,
         quiet: bool = False,
+        max_session_calls: int | None = None,
     ):
         self.log_path, self.price_path = Path(log_path), Path(price_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.total_cap, self.run_cap, self.override, self.quiet = total_cap, run_cap, override, quiet
         self._inflight: dict[str, int] = {}
         self._lock = asyncio.Lock()
+        self.max_session_calls = max_session_calls
+        self.start_billed = self.billed()
 
     # --- log ---------------------------------------------------------------
 
@@ -125,6 +130,10 @@ class Budget:
                 "(usage & billing) for the real per-call cost, then run:\n"
                 "    uv run python tools/fal_budget.py confirm-price <usd_per_call>"
             )
+        if self.max_session_calls is not None:
+            session = self.billed() - self.start_billed + inflight_total + n_new
+            if session > self.max_session_calls:
+                raise BudgetError(f"session cap: {session} calls > {self.max_session_calls} this session (hard stop)")
         if self.override:
             return
         if total > self.total_cap:

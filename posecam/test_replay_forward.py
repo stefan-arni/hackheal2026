@@ -54,11 +54,35 @@ def test_uniform_rate_during_a_test():
     feed(fw, 1000, 5000)  # 4 s at 30 fps
     fw.flush()
     frames = rec.frames()
-    assert 5 <= len(frames) <= 7  # 1.5 fps
+    assert 4 <= len(frames) <= 5  # tandem: 1 fps
     assert frames[0][0] == "http://replay:8017/replay/bess-tandem-1000/frame"
     assert rec.field(frames[0], "kind") == "uniform"
     assert json.loads(rec.field(frames[0], "crop")) == [0, 0, 1080, 1920]  # full frame, never cropped
     assert JPEG in frames[0][1]
+
+
+def test_single_leg_uniform_rate_is_higher():
+    rec = Recorder()
+    fw = ReplayForwarder("http://replay:8017", sender=rec)
+    fw.on_messages([{"kind": "bess_started", "stance": "single"}, {"kind": "bess_running"}], 1000)
+    feed(fw, 1000, 5000)
+    fw.flush()
+    assert 6 <= len(rec.frames()) <= 7  # 1.5 fps
+
+
+def test_no_burst_for_non_foot_errors():
+    rec = Recorder()
+    fw = ReplayForwarder("http://replay:8017", sender=rec)
+    fw.on_messages([{"kind": "bess_started", "stance": "double"}, {"kind": "bess_running"}], 0)
+    feed(fw, 0, 2000)
+    for err in ("hands_off_hips", "hip_angle", "eyes_open", "out_of_position"):
+        fw.on_messages([{"kind": "bess_error", "error": err}], 2000)
+    feed(fw, 2000, 3000)
+    fw.on_messages([{"kind": "bess_done", "errors": 4}], 3000)
+    fw.flush()
+    assert {rec.field(c, "kind") for c in rec.frames()} == {"uniform"}
+    end = json.loads([c for c in rec.calls if c[0].endswith("/end")][0][1])
+    assert len(end["events"]) == 4  # still reported, just no frames
 
 
 def test_burst_includes_the_half_second_before_the_error():

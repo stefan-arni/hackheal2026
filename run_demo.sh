@@ -13,20 +13,23 @@
 #   --height CM         patient height for metric scaling (default 185; 0 = SAM's own scale)
 #   --name TEXT         session name (shown on the session report)
 #   --duration S        BESS seconds per stance (default 10: the shortened demo protocol)
-#   --deadline S        publish each trial's replay this long after it ends (default 45)
+#   --deadline S        publish each trial's replay this long after it ends (default 30)
+#   --max-usd X         hard stop: the replay service makes at most X dollars of fal calls (incl. warm-up)
+#   --yes               don't ask (live start / warm-up); only after the spend was approved
 #   --straggler N:S     mock only: the N-th fal call takes S seconds (default 12:150)
 # Ctrl-C stops everything. Logs: replay/data/logs/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPLAY="$ROOT/replay"; POSECAM="$ROOT/posecam"
-MODE=cache; WARMUP=0; EYES=0; TUNNEL=0; HEIGHT=185; NAME="demo"; DURATION=10; DEADLINE=45; STRAGGLER="12:150"
+MODE=cache; WARMUP=0; EYES=0; TUNNEL=0; HEIGHT=185; NAME="demo"; DURATION=10; DEADLINE=30; STRAGGLER="12:150"; MAXUSD=""; YES=0
 REPLAY_PORT=8017; POSE_PORT=8765; EYE_PORT=8766
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live) MODE=live ;; --mock) MODE=mock ;; --warmup) WARMUP=1 ;; --eyes) EYES=1 ;; --tunnel) TUNNEL=1 ;;
     --height) HEIGHT="$2"; shift ;; --name) NAME="$2"; shift ;; --duration) DURATION="$2"; shift ;;
     --deadline) DEADLINE="$2"; shift ;; --straggler) STRAGGLER="$2"; shift ;;
+    --max-usd) MAXUSD="$2"; shift ;; --yes) YES=1 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac; shift
@@ -43,10 +46,12 @@ done
 
 # ---- replay service
 ENV=(REPLAY_DEADLINE_S="$DEADLINE" REPLAY_FAL_WORKERS=3)
+[[ -n "$MAXUSD" ]] && ENV+=(REPLAY_MAX_USD="$MAXUSD")
 case "$MODE" in
   live)
     (cd "$REPLAY" && uv run tools/fal_budget.py status 2>/dev/null | tail -3) || true
-    read -r -p "fal LIVE: every frame is a billed call (\$0.018; ~70 frames per 3-trial session ≈ \$1.30). Start? [y/N] " ok
+    ok=y
+    [[ $YES == 1 ]] || read -r -p "fal LIVE: every frame is a billed call (\$0.018; ~50-60 frames per 3-trial session ≈ \$1). Start? [y/N] " ok
     [[ "$ok" == y* ]] || exit 1
     ENV+=(REPLAY_LIVE=1 REPLAY_YES=1) ;;
   mock)
@@ -67,7 +72,7 @@ if [[ $WARMUP == 1 ]]; then
   FRAME=$(ls "$REPLAY"/data/frames/demo/*.jpg 2>/dev/null | head -1 || true)
   if [[ -z "$FRAME" ]]; then echo "warm-up skipped: no frame in replay/data/frames/demo"; else
     go=y
-    if [[ $MODE == live ]]; then read -r -p "Send 1 fal warm-up call (\$0.018)? [y/N] " go; fi
+    if [[ $MODE == live && $YES != 1 ]]; then read -r -p "Send 1 fal warm-up call (\$0.018)? [y/N] " go; fi
     if [[ $MODE == cache ]]; then echo "warm-up skipped: cache-only mode never calls fal"; go=n; fi
     if [[ "$go" == y* ]]; then
       echo -n "warm-up: "; curl -sf -X POST "http://localhost:$REPLAY_PORT/replay/warmup?force=1" -F "jpeg=@$FRAME;type=image/jpeg" || echo "failed (see $LOGS/replay.log)"; echo
@@ -104,7 +109,7 @@ IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null ||
 cat <<EOF
 
 ================================================================
- session          $SID   (fal: $MODE, $DURATION s per stance, replay deadline $DEADLINE s)
+ session          $SID   (fal: $MODE, $DURATION s per stance, replay deadline $DEADLINE s${MAXUSD:+, spend cap \$$MAXUSD})
  doctor dashboard http://localhost:$REPLAY_PORT/dashboard/$SID
 EOF
 [[ -n "$PUBLIC" ]] && echo " public dashboard $PUBLIC/dashboard/$SID"

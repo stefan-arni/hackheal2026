@@ -192,6 +192,19 @@ def test_total_cap_and_override(env):
     assert q2.posts == 1
 
 
+def test_session_cap_is_a_hard_stop(env):
+    make, _ = env
+    sam, budget, q = make()
+    run(sam.reconstruct(b"earlier"))  # spend before this session does not count
+    budget2_sam, budget2, q2 = make(max_session_calls=2, override=True)
+
+    async def go():
+        return await asyncio.gather(*(budget2_sam.reconstruct(f"s{i}".encode()) for i in range(6)), return_exceptions=True)
+
+    out = run(go())
+    assert q2.posts == 2 and sum(isinstance(r, BudgetError) for r in out) == 4  # even with override
+
+
 def test_caps_hold_under_concurrency(env):
     make, _ = env
     sam, budget, q = make(run_cap=3)

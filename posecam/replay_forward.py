@@ -4,11 +4,13 @@
 
 During a BESS test (bess_running -> bess_done/failed/cancelled) this sends:
   - full frames (never cropped: SAM 3D Body assumes the image centre is the optical axis)
-    at 1.5 fps from 1 s before scoring starts (the baseline; the rest of the countdown is
-    skipped), plus a 10 fps burst covering 0.5 s before and after every error /
-    touchdown (the 0.5 s before comes from a 1 s ring buffer), at most MAX_BURST_FRAMES
-    burst frames per trial: fal does ~0.7 frames/s, so a 3-trial session must stay near
-    ~25 frames per trial to be reconstructed within each trial's deadline
+    from 1 s before scoring starts (the baseline; the rest of the countdown is skipped) at
+    UNIFORM_FPS for the stance (1 fps double/tandem, 1.5 fps single leg), plus a 10 fps
+    burst covering 0.5 s before and after every FOOT event (touchdown, step/stumble/fall,
+    heel/forefoot lift; the 0.5 s before comes from a 1 s ring buffer), at most
+    MAX_BURST_FRAMES burst frames per trial. Non-foot errors (hands off hips, hip angle,
+    eyes, out of position) get no burst: the 3D replay adds nothing for them, and fal does
+    only ~0.7 frames/s, so every frame counts against each trial's deadline
     -> POST {url}/replay/{trialId}/frame   multipart: jpeg, t, crop, frame_size, kind
   - on bess_done (or failed/cancelled): POST {url}/replay/{trialId}/end with the trial's
     events as {t, kind, side} (t = the frame's client timestamp, ms) and patient height.
@@ -37,7 +39,9 @@ from typing import Callable
 
 log = logging.getLogger("replay-forward")
 
-UNIFORM_FPS = 1.5
+UNIFORM_FPS = {"double": 1.0, "tandem": 1.0, "single": 1.5}
+DEFAULT_UNIFORM_FPS = 1.5
+FOOT_ERRORS = ("step_stumble_fall", "foot_lift")  # BESS errors about foot contact (+ foot_touchdown)
 BURST_FPS = 10.0
 BURST_HALF_S = 0.5
 RING_S = 1.0
@@ -80,6 +84,7 @@ class ReplayForwarder:
         self.trial_clock: str | None = None  # "phone" or "server", fixed for the whole trial
         self.offset: float | None = None  # latest phone_ms - server_ms (to map stray frames)
         self.events: list[dict] = []
+        self.uniform_fps = DEFAULT_UNIFORM_FPS
         self.running = False  # scoring started (bess_running); countdown frames are not sent
         self.max_burst_frames = max_burst_frames
         self.burst_frames = 0
@@ -122,7 +127,7 @@ class ReplayForwarder:
                 and self.burst_frames < self.max_burst_frames):
             self._send_frame(t, jpeg, size, "burst")
             self.last_burst = t
-        elif t - self.last_uniform >= 1000 / UNIFORM_FPS:
+        elif t - self.last_uniform >= 1000 / self.uniform_fps:
             self._send_frame(t, jpeg, size, "uniform")
             self.last_uniform = t
 
@@ -137,6 +142,7 @@ class ReplayForwarder:
                 self.trial = f"bess-{m.get('stance', 'test')}-{int(start)}"
                 self.events, self.sent_ms = [], set()
                 self.running, self.burst_frames, self.skipped_bursts = False, 0, 0
+                self.uniform_fps = UNIFORM_FPS.get(m.get("stance"), DEFAULT_UNIFORM_FPS)
                 self.last_uniform = self.last_burst = self.burst_until = -1e18
                 log.info("replay trial %s started (%s clock)", self.trial, self.trial_clock)
                 continue
@@ -153,7 +159,8 @@ class ReplayForwarder:
                 self.events.append({"t": t, "kind": "foot_down" if kind == "foot_touchdown" else m.get("error", kind),
                                     "side": m.get("foot"), "label": m.get("label"), "counted": m.get("counted", True),
                                     "source": "posecam"})
-                self._burst(t)
+                if kind == "foot_touchdown" or m.get("error") in FOOT_ERRORS:
+                    self._burst(t)
             elif kind in END_KINDS:
                 bess = {k: m.get(k) for k in ("stance", "errors", "by_type", "coverage", "reason") if k in m}
                 body = json.dumps({"events": self.events, "patient_height_cm": self.height, "clock": self.trial_clock,
@@ -167,11 +174,11 @@ class ReplayForwarder:
     # ---- internals
 
     def _baseline(self, t: float) -> None:
-        """Scoring just started: send the last second of the countdown (the start position) at 1.5 fps."""
+        """Scoring just started: send the last second of the countdown (the start position)."""
         for client, server, jpeg, size in list(self.ring):
             ft = self._t(client, server)
             if (ft is not None and t - RING_S * 1000 <= ft <= t
-                    and ft - self.last_uniform >= 1000 / UNIFORM_FPS):
+                    and ft - self.last_uniform >= 1000 / self.uniform_fps):
                 self._send_frame(ft, jpeg, size, "uniform")
                 self.last_uniform = ft
 

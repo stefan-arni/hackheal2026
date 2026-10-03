@@ -10,7 +10,7 @@ apart, one session.** Research demo, not a diagnostic device.
 |---|---|---|---|
 | iOS test screen | `posecam/ios/BessTestView.swift` (Liyan) | – | Three BESS buttons; sends camera JPEGs + `bess_start` over WebSocket |
 | posecam pose server | `posecam/server.py` | **8765** (ws) | MediaPipe 2D pose, balance, BESS scoring (countdown 5 s + `--bess-duration` s) |
-| └ replay forwarder | `posecam/replay_forward.py` | → 8017 | During each trial: frames at 1.5 fps from 1 s before scoring (baseline) + 10 fps error bursts (±0.5 s, max 10 burst frames per trial); `/end` with events and BESS result |
+| └ replay forwarder | `posecam/replay_forward.py` | → 8017 | During each trial, from 1 s before scoring (baseline): uniform frames at 1 fps (double, tandem) or 1.5 fps (single leg), plus 10 fps bursts (±0.5 s, max 10 burst frames per trial) for foot events only (touchdown, step/stumble/fall, heel/forefoot lift); `/end` with all events and the BESS result |
 | └ live publisher | `posecam/replay_publish.py` | → 8017 | ~10 Hz summaries (2D landmarks, balance, foot heights, trunk angle, BESS timer/errors/scores) + every event → dashboard |
 | posecam eye server (optional) | `posecam/eye_server.py` | 8766 (ws) | Eye tracking; not part of the balance protocol |
 | replay service | `replay/service/app.py` (FastAPI) | **8017** (http) | Sessions, fal queue, staged replay publishing, dashboard, reports |
@@ -28,6 +28,7 @@ apart, one session.** Research demo, not a diagnostic device.
 ```bash
 ./run_demo.sh --mock --warmup          # rehearsal: fal mocked (free), 4.4 s/frame, 3 parallel, one 150 s straggler
 ./run_demo.sh --live --warmup          # real fal: asks before starting and before the warm-up call
+./run_demo.sh --live --warmup --max-usd 1.20   # + hard stop: no fal call beyond $1.20 (incl. warm-up)
 ./run_demo.sh --live --tunnel --eyes   # + public dashboard URL, + eye server
 ```
 
@@ -56,17 +57,19 @@ Dashboard screenshots of a live page: `node replay/tools/screenshot.mjs <url> ou
    the phone's `timestamp_ms` if frames carry it, else the server's receive time).
 2. Scoring starts (`bess_running`): the forwarder sends the last countdown second (start
    position), then 1.5 fps frames (`POST /replay/{trial}/frame`, `kind=uniform`, `session=…`).
-   Each BESS error / touchdown adds a 10 fps burst (`kind=burst`), up to 10 burst frames per trial.
+   Each foot event (touchdown, step/stumble/fall, heel/forefoot lift) adds a 10 fps burst
+   (`kind=burst`), up to 10 burst frames per trial. Hands off hips, hip angle, eyes and out of
+   position are reported in `/end` but get no burst frames.
 3. In parallel the publisher pushes summaries and events (`POST /live/{session}/push`); the
    dashboard gets them over `GET /live/{session}/stream` (SSE).
 4. The replay service queues each frame for fal (scheduler order above) and stores results per
    trial in `replay/data/trials/<trial>/frames/`.
 5. `bess_done` → `POST /replay/{trial}/end` (events, BESS errors, patient height, session).
-   The trial's deadline is set to end + 45 s (`REPLAY_DEADLINE_S`).
+   The trial's deadline is set to end + 30 s (`REPLAY_DEADLINE_S`).
 6. Publishing, each an atomic bundle swap in `replay/data/trials/<trial>/`:
    - **error** replay as soon as the burst and anchor frames are done (≥ 6 frames; if one of
      them straggles, at end + 15 s once 75 % are done),
-   - **full** replay when every frame is done, or **deadline** replay at end + 45 s with whatever
+   - **full** replay when every frame is done, or **deadline** replay at end + 30 s with whatever
      is done (the viewer interpolates the gaps; the badge shows the coverage),
    - **update** when late frames finish afterwards (at most every 10 s; logged as late frames).
    The dashboard card shows "processing x/y frames · ETA", then loads the viewer in
@@ -84,13 +87,20 @@ floor fit and fell back to an unaligned camera-frame replay.
 
 ## Frame budget (why the caps)
 
-fal reconstructs ~0.7 frames/s (3 in parallel × ~4.4 s). One trial every ~30 s means ~20–25
-frames per trial can finish before its deadline. Per trial: ~16 uniform (1.5 fps × 11 s) +
-≤ 10 burst frames ≈ 26 frames; a 3-trial session ≈ 75–80 frames ≈ **$1.40 live**.
-The first mock rehearsal without the caps sent 87 frames for one trial (many error bursts
-during the countdown and the trial) and missed every deadline.
+fal reconstructs ~0.7 frames/s (3 in parallel × ~4.4 s). One trial every ~30 s means only
+~20 frames per trial can finish before its deadline. Per trial: 11 uniform frames for double
+and tandem (1 fps × 11 s), 17 for single leg (1.5 fps), plus ≤ 10 burst frames on foot events
+only. That is at most ~70 frames per session, fewer when a stance has no foot events.
+The first mock rehearsal without the caps sent 87 frames for one trial and missed every deadline.
 
-## Measured timeline (mock rehearsal, 2026-10-03)
+The fal client's own concurrency limit now follows `REPLAY_FAL_WORKERS` (3). Before this it
+defaulted to 2, so earlier rehearsals ran 2 frames at once, not 3.
+
+Spend cap: `--max-usd X` (env `REPLAY_MAX_USD`) is a hard stop in the replay service. Once
+X / $0.018 calls (warm-up and retries included) are billed or in flight, further frames are
+refused, not sent. Replays then publish with the frames already done.
+
+## Measured timeline (mock rehearsal, 2026-10-03, previous budget: 1.5 fps, bursts on every error, 45 s deadline, 2 fal slots)
 
 `./run_demo.sh --mock --warmup` + `tools/rehearse_protocol.py`: IMG_9691 segments streamed
 in real time at 720 px, fal mocked at 4.4 s ± 15 % per frame, 3 in parallel, the 12th call
@@ -106,6 +116,37 @@ Total 78 frames per session → **≈ $1.40 live** at $0.018/call (+ $0.018 warm
 Deadline coverage is lower for trials 1–2 because the straggler holds one of the three workers
 for 150 s. Screenshots of every stage: `replay/data/reports/rehearsal/` (local, not committed).
 
+## Plan B: iPhone as Continuity Camera (no iOS code)
+
+If the iOS app can't send frames yet, use the iPhone as a Mac webcam. The rehearsal tool streams
+it into posecam exactly like the phone would (JSON frames with `timestamp_ms`).
+
+Setup (once):
+1. iPhone and Mac on the same Apple ID, Wi-Fi and Bluetooth on (macOS 13+, iOS 16+).
+   iPhone: Settings › General › AirPlay & Continuity › Continuity Camera on.
+2. Mac: System Settings › Privacy & Security › Camera: allow the app you run the tool from
+   (Terminal, iTerm or VS Code). Without this, every camera fails with "Cannot use … Camera".
+3. Mount the iPhone on a tripod, **locked**, rear camera facing the patient, still, ~2.5–3 m
+   away, whole body including feet in frame. Portrait mounting is fine (use `--rotate`).
+
+Run:
+```bash
+./run_demo.sh --live --warmup                      # terminal 1: prints the session id
+cd replay
+uv run tools/rehearse_protocol.py --list-cameras   # e.g. [1] Stefan's iPhone 17 Camera
+uv run tools/rehearse_protocol.py --session <id> --camera auto --rotate 90 --trigger key
+```
+- `--camera auto` picks the iPhone (never its Desk View), else the first camera; or pass an index or name.
+- `--rotate 0|90|180|270` rotates clockwise before sending (portrait mount: usually 90 or 270;
+  check the dashboard skeleton is upright).
+- `--trigger key`: press Enter to start each trial (feet together → tandem → single leg).
+  `--trigger timer`: first trial after `--first-delay` s, then `--gap` s (15) after each trial ends.
+- After the last trial it waits for the replays and prints the timeline, like the clip rehearsal.
+
+Checked on this laptop: the device list shows "Stefan's iPhone 17 Camera" and `auto` picks it.
+Capture itself could not be tested from this session: macOS refused camera access to the app
+running it (step 2).
+
 ## A. Real-iPhone run (Liyan's iOS test screen)
 
 1. Laptop and iPhone on the same Wi-Fi (no client isolation; a phone hotspot works).
@@ -117,7 +158,7 @@ for 150 s. Screenshots of every stage: `replay/data/reports/rehearsal/` (local, 
    "Between trials".
 6. Press **Feet Together**; patient gets into position during the 5 s countdown, hands on hips,
    stays 10 s. Wait ~15 s. **Tandem**. Wait ~15 s. **Single Leg** (non-dominant foot up).
-7. Watch each replay card: processing → error replay → full/deadline replay (~45 s after each trial).
+7. Watch each replay card: processing → error replay → full/deadline replay (~30 s after each trial).
 8. Open the session report; print or save as PDF.
 
 ## B. Zoom dry run (doctor screen-shares the dashboard)
@@ -137,6 +178,7 @@ for 150 s. Screenshots of every stage: `replay/data/reports/rehearsal/` (local, 
 
 - The iOS camera pipeline calling `sendFrame` (BessTestView only has the WebSocket client);
   frames from the phone carry no `timestamp_ms` yet (server receive time is used).
+  Plan B (Continuity Camera) avoids this; its capture still needs one test with camera permission.
 - No real-iPhone end-to-end run yet; the mock rehearsal uses the recorded clip at 720 px.
 - Mock replays use the nearest stored pose per frame, so their numbers are not meaningful
   (the dashboard and viewer say "fal MOCK").

@@ -28,7 +28,7 @@ Queue (service/scheduler.py): one priority order across the session's trials, wi
 REPLAY_FAL_WORKERS (default 3 = fal's measured parallelism) frames in flight: error bursts
 first, then coarse-to-fine uniform frames by trial deadline. Publishing per trial: an "error"
 replay as soon as its burst frames are done, then "full" (all frames) or "deadline"
-(REPLAY_DEADLINE_S after the trial ends, default 45 s, with whatever is done; the viewer
+(REPLAY_DEADLINE_S after the trial ends, default 30 s, with whatever is done; the viewer
 interpolates the gaps); late frames are logged and trigger an "update" republish.
 """
 
@@ -67,7 +67,7 @@ log = logging.getLogger("replay")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 TRIALS_DIR = Path(os.environ.get("REPLAY_TRIALS_DIR", REPLAY_ROOT / "data/trials"))
-DEADLINE_S = float(os.environ.get("REPLAY_DEADLINE_S", 45))
+DEADLINE_S = float(os.environ.get("REPLAY_DEADLINE_S", 30))
 WORKERS = int(os.environ.get("REPLAY_FAL_WORKERS", 3))
 UPDATE_EVERY_S = float(os.environ.get("REPLAY_UPDATE_EVERY_S", 10))  # late frames: republish at most this often
 MIN_FRAMES = 6  # fewer reconstructed frames than this: no bundle yet
@@ -79,7 +79,11 @@ LIVE = os.environ.get("REPLAY_LIVE") == "1"
 # "override" = use it for the floor tilt. On IMG_9691, SAM's whole mesh sat ~4.9° off true gravity
 # while its feet stayed flat on its own floor, so overriding moved the COM ~9 cm the wrong way.
 GRAVITY_MODE = os.environ.get("REPLAY_GRAVITY_MODE", "check")
+MAX_USD = float(os.environ["REPLAY_MAX_USD"]) if os.environ.get("REPLAY_MAX_USD") else None  # hard stop per service run
 BUDGET = Budget(override=os.environ.get("REPLAY_BUDGET_OVERRIDE") == "1")
+if MAX_USD is not None:
+    BUDGET.max_session_calls = int(MAX_USD / BUDGET.price()[0] + 1e-9)
+    log.warning("spend cap: at most %d fal calls ($%.2f) while this service runs", BUDGET.max_session_calls, MAX_USD)
 BACKEND = None
 if MOCK_RUN:
     dirs = [Path(d) if Path(d).is_absolute() else REPLAY_ROOT / d for d in MOCK_RUN.split(",")]
@@ -106,7 +110,7 @@ _sam: SamBodyClient | None = None
 def sam() -> SamBodyClient:
     global _sam
     if _sam is None:  # one client: the fal concurrency limit is per account, shared across trials
-        _sam = SamBodyClient(live=LIVE, run="service", budget=BUDGET, backend=BACKEND)
+        _sam = SamBodyClient(live=LIVE, run="service", budget=BUDGET, backend=BACKEND, concurrency=WORKERS)
     return _sam
 
 
@@ -205,7 +209,10 @@ async def run_job(job: Job) -> None:
         jpeg, mask, size, scale = downscale_for_live(p["jpeg"], p["mask"])
         await asyncio.to_thread(save_source_frame, tr.frames_dir / f"{job.stem}_src.jpg", jpeg)
         extra = {**p["extra"], "downscale": round(scale, 5)}
+        t_call = time.time()
         res = await sam().reconstruct(jpeg, mask, run=tr.id, priority=0 if job.kind == "burst" else 1)
+        extra.update(call_start_wall=round(t_call, 3), call_end_wall=round(time.time(), 3),  # parallelism report
+                     from_cache=res.from_cache)
         write_frame(tr.frames_dir, job.stem, t_ms=job.t_ms, image_size=size, response=res.response,
                     latency_s=res.latency_s, ply=res.ply, visualization=res.visualization, extra=extra)
         tr.done += 1
