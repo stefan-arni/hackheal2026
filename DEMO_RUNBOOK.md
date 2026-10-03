@@ -21,7 +21,12 @@ Protocol: 3 BESS trials of 10 s (feet together → tandem → single leg), 8 s c
 4. Open these before the demo:
    - dashboard `http://localhost:8017/dashboard/<id>` (Zoom: the `--tunnel` public URL, if remote)
    - session report `http://localhost:8017/session/<id>/report`
-   - backup replay `http://localhost:8017/viewer/?src=/cache/demo_live/&jump=step`
+   - default instant replay (step-down): `http://localhost:8017/viewer/?src=/cache/demo_IMG_9691/&jump=step`
+   - stored protocol trials (teammate clip, fal live, camera moved: sway less reliable):
+     `http://localhost:8017/viewer/?src=/cache/demo_protocol_double/`, `…_tandem/`, `…_single/`.
+     The dashboard's **◀ Previous trial** opens the step-down and has buttons for these.
+   - this Mac only (local data): reports `http://localhost:8017/replay/bess-single-protocol/report`
+     (also `bess-double-protocol`, `bess-tandem-protocol`) and the session summary `http://localhost:8017/session/protocol/report`
    - backup MP4 in QuickTime: `replay/data/reports/IMG_9691/instant_replay_stepdown.mp4`
 
 ## Each trial

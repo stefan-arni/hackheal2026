@@ -1,0 +1,350 @@
+{
+ "frames": 28,
+ "duration_s": 9.5,
+ "t_start_ms": 1791055692631.7,
+ "ap_estimated": false,
+ "margin": {
+  "min_cm": -1.16,
+  "min_at_ms": 1791055702131.7,
+  "median_cm": 0.24,
+  "time_outside_bos_s": 2.65,
+  "fraction_outside": 0.301,
+  "outside_episodes": [
+   {
+    "start_ms": 1791055693631.7,
+    "end_ms": 1791055693631.7,
+    "duration_s": 0.5,
+    "min_margin_cm": -0.5,
+    "uncertain": true
+   },
+   {
+    "start_ms": 1791055696131.7,
+    "end_ms": 1791055696631.7,
+    "duration_s": 0.9,
+    "min_margin_cm": -0.92,
+    "uncertain": true
+   },
+   {
+    "start_ms": 1791055697231.7,
+    "end_ms": 1791055697231.7,
+    "duration_s": 0.1,
+    "min_margin_cm": -0.01,
+    "uncertain": true
+   },
+   {
+    "start_ms": 1791055698131.7,
+    "end_ms": 1791055698131.7,
+    "duration_s": 0.4,
+    "min_margin_cm": -0.67,
+    "uncertain": true
+   },
+   {
+    "start_ms": 1791055701631.7,
+    "end_ms": 1791055702131.7,
+    "duration_s": 0.75,
+    "min_margin_cm": -1.16,
+    "uncertain": true
+   }
+  ],
+  "frames_without_bos": 6,
+  "uncertain_below_cm": 2.2
+ },
+ "ml_sway": {
+  "rms_cm": 7.61,
+  "range_cm": 17.61,
+  "path_length_cm": 25.5,
+  "mean_speed_cm_s": 2.69,
+  "note": "COM x after 0.3 s Gaussian smoothing; path length depends on frame rate"
+ },
+ "ap_sway": {
+  "rms_cm": 5.6,
+  "range_cm": 25.6,
+  "path_length_cm": 48.4,
+  "mean_speed_cm_s": 5.09,
+  "estimated": false
+ },
+ "trunk_lean_deg": {
+  "ml_p5": 1.9,
+  "ml_p95": 23.0,
+  "ap_p5": 6.2,
+  "ap_p95": 16.3,
+  "ml_min": 1.6,
+  "ml_max": 30.9,
+  "ml_range": 29.4,
+  "ap_min": 5.9,
+  "ap_max": 18.4,
+  "ap_range": 12.5,
+  "ap_estimated": false,
+  "ml_max_at_ms": 1791055696131.7,
+  "ap_max_at_ms": 1791055696131.7,
+  "convention": "+ml toward patient's left (+x), +ap forward (toward camera)"
+ },
+ "stance": {
+  "available": true,
+  "seconds": {
+   "double_staggered": 0.5,
+   "double_tandem": 0.75,
+   "single_left": 8.25
+  },
+  "segments": [
+   {
+    "stance": "double_tandem",
+    "start_ms": 1791055692631.7,
+    "end_ms": 1791055693131.7,
+    "duration_s": 0.75
+   },
+   {
+    "stance": "double_staggered",
+    "start_ms": 1791055693631.7,
+    "end_ms": 1791055693631.7,
+    "duration_s": 0.5
+   },
+   {
+    "stance": "single_left",
+    "start_ms": 1791055694131.7,
+    "end_ms": 1791055702131.7,
+    "duration_s": 8.25
+   }
+  ],
+  "method": "lowest heel/toe keypoint of each foot; up > 3.0 cm above the other foot, down < 1.5 cm",
+  "expected": {
+   "stance": "single_left",
+   "fraction_matching": 0.868,
+   "pass": false
+  }
+ },
+ "touchdowns": [
+  {
+   "kind": "step",
+   "side": "left",
+   "t_ms": 1791055697430.0,
+   "resolution_s": null,
+   "source": "scout",
+   "frame": 14,
+   "foot": {
+    "heel": [
+     -0.0552,
+     -0.1968
+    ],
+    "toe": [
+     0.0414,
+     -0.0236
+    ]
+   },
+   "uncertain": false,
+   "sources": [
+    {
+     "source": "scout",
+     "kind": "step",
+     "t_ms": 1791055697430.0
+    }
+   ],
+   "min_margin_cm": -0.92,
+   "com_exit_ms": 1791055696131.7,
+   "lead_s": 1.3,
+   "label": "Step (left)",
+   "n": 1
+  }
+ ],
+ "touchdowns_raw": [
+  {
+   "kind": "step",
+   "side": "left",
+   "t_ms": 1791055697430.0,
+   "resolution_s": null,
+   "source": "scout",
+   "frame": 14,
+   "uncertain": false,
+   "original_kind": "step"
+  }
+ ],
+ "series": {
+  "t_ms": [
+   1791055692631.7,
+   1791055693131.7,
+   1791055693631.7,
+   1791055694131.7,
+   1791055694631.7,
+   1791055695131.7,
+   1791055695631.7,
+   1791055696131.7,
+   1791055696631.7,
+   1791055696931.7,
+   1791055697031.7,
+   1791055697131.7,
+   1791055697231.7,
+   1791055697331.7,
+   1791055697431.7,
+   1791055697531.7,
+   1791055697631.7,
+   1791055697731.7,
+   1791055697831.7,
+   1791055698131.7,
+   1791055698631.7,
+   1791055699131.7,
+   1791055699631.7,
+   1791055700131.7,
+   1791055700631.7,
+   1791055701131.7,
+   1791055701631.7,
+   1791055702131.7
+  ],
+  "trunk_ml_deg": [
+   1.6,
+   1.8,
+   2.2,
+   3.5,
+   4.6,
+   10.2,
+   26.1,
+   30.9,
+   17.3,
+   15.9,
+   15.8,
+   15.6,
+   15.3,
+   14.9,
+   14.3,
+   13.6,
+   12.9,
+   12.2,
+   11.5,
+   9.1,
+   4.3,
+   4.6,
+   5.5,
+   8.8,
+   12.0,
+   8.4,
+   7.4,
+   7.2
+  ],
+  "trunk_ap_deg": [
+   7.0,
+   6.8,
+   6.0,
+   6.6,
+   7.7,
+   9.1,
+   15.7,
+   18.4,
+   10.3,
+   9.4,
+   9.5,
+   9.6,
+   9.8,
+   10.0,
+   10.2,
+   10.4,
+   10.5,
+   10.6,
+   10.6,
+   10.3,
+   9.6,
+   9.3,
+   10.2,
+   15.2,
+   16.5,
+   10.2,
+   7.5,
+   5.9
+  ],
+  "stance": [
+   "double_tandem",
+   "double_tandem",
+   "double_staggered",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left",
+   "single_left"
+  ],
+  "outside_cum_s": [
+   0.0,
+   0.0,
+   0.5,
+   0.5,
+   0.5,
+   0.5,
+   0.5,
+   1.0,
+   1.4,
+   1.4,
+   1.4,
+   1.4,
+   1.5,
+   1.5,
+   1.5,
+   1.5,
+   1.5,
+   1.5,
+   1.5,
+   1.9,
+   1.9,
+   1.9,
+   1.9,
+   1.9,
+   1.9,
+   1.9,
+   2.4,
+   2.65
+  ]
+ },
+ "noise_floor_cm": {
+  "x": 0.73,
+  "y": 0.55,
+  "z": 0.59
+ },
+ "events": [
+  {
+   "t": 1791055694060.0,
+   "kind": "foot_lift",
+   "side": "right",
+   "source": "scout",
+   "t_clip_s": 26.06,
+   "label": "Right foot lifted"
+  },
+  {
+   "t": 1791055697430.0,
+   "kind": "step",
+   "side": "left",
+   "source": "scout",
+   "t_clip_s": 29.43,
+   "label": "Standing foot shifted"
+  }
+ ],
+ "quality": {
+  "label": "good",
+  "reasons": [],
+  "metrics": {
+   "reprojection_median_px": 10.0,
+   "noise_x_cm": 0.73,
+   "dropped_frac": 0.0,
+   "ground_anchor_median_cm": 1.18
+  },
+  "forward_back": "measured",
+  "floor_source": "sole_vertices",
+  "contact_band_cm": 1.66,
+  "gravity_vs_feet_deg": null
+ }
+}

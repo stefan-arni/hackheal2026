@@ -1,6 +1,7 @@
-"""Cache a finished live trial as the dashboard's "previous trial" fallback (replay/cache/demo_live/).
+"""Cache a finished trial as a dashboard "previous trial" fallback (replay/cache/demo_<name>/).
 
-    uv run python tools/cache_trial.py bess-single-1791045891978
+    uv run python tools/cache_trial.py bess-single-1791045891978            # -> cache/demo_live/
+    uv run python tools/cache_trial.py bess-single-protocol protocol_single  # -> cache/demo_protocol_single/
 
 Mesh, analytics and metadata only: no camera frames or photos (cache/demo_*/ is committed).
 """
@@ -12,7 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 tid = sys.argv[1]
-src, dst = ROOT / "data/trials" / tid, ROOT / "cache/demo_live"
+name = sys.argv[2] if len(sys.argv) > 2 else "live"
+src, dst = ROOT / "data/trials" / tid, ROOT / f"cache/demo_{name}"
 meta = json.loads((src / "meta.json").read_text())
 shutil.rmtree(dst, ignore_errors=True)
 dst.mkdir(parents=True)

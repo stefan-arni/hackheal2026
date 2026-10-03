@@ -171,7 +171,8 @@ def stabilogram(com_cm: np.ndarray, m_cm: np.ndarray, hulls, key_hull, touchdown
 # --------------------------------------------------------------------------- page
 
 def write_report(out: Path, meta: dict, stats: dict, result: dict, *, title: str | None = None,
-                 cross_validation: dict | None = None) -> Path:
+                 cross_validation: dict | None = None, warning: str | None = None) -> Path:
+    warning = warning or meta.get("warning")  # e.g. "camera moved during recording" (shown at the top)
     assets = out / "report_assets"
     assets.mkdir(exist_ok=True)
     t_abs = np.asarray(result["t_s"], float)
@@ -254,6 +255,7 @@ a.back{{color:{BLUE}}} @media print{{body{{background:#fff}} .page{{margin:0;box
 <div class="right"><span class="pill" style="background:{qcol}">quality: {html.escape(q.get("label", "–"))}</span>
 <span class="pill warn">forward/back {html.escape(q.get("forward_back", "estimated"))}</span>
 <div class="noprint" style="margin-top:6px"><a class="back" id="open3d" href="#">open 3D replay</a></div></div></header>
+{f'<div style="background:#fef3c7;border:2px solid {AMBER};border-radius:8px;padding:6px 10px;font-weight:800;margin:2mm 0">{html.escape(warning)}</div>' if warning else ''}
 <script>/* the bundle folder this report lives in, for the viewer link (service: /replay/<id>/report) */
 const base = location.pathname.replace(/(report(\.html)?)$/, '');
 document.getElementById('open3d').href = '/viewer/?src=' + encodeURIComponent(base);</script>

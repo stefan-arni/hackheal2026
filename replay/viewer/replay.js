@@ -240,6 +240,7 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
 
   if (data.synthetic) top.append(el('span', 'rp-badge syn', 'SYNTHETIC'));
   if (Q.MOCK_FAL) top.append(el('span', 'rp-badge syn', 'fal MOCK'));
+  if (meta?.warning) { const w = el('span', 'rp-badge est', 'camera moved · sway less reliable'); w.title = meta.warning; top.append(w); }
   const COV = meta?.coverage, partial = !!COV && COV.received > 0 && COV.done < COV.received;
   if (COV) {
     const b = el('span', `rp-badge ${partial ? 'est' : 'ok'}`, `${COV.done}/${COV.received} frames · ${COV.stage}${partial ? ' · gaps interpolated' : ''}`);

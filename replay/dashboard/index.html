@@ -72,15 +72,21 @@
   </section>
   <section class="col replays" id="replays"><h2>3D replays (one per trial)</h2></section>
 </main>
-<div class="overlay" id="overlay"><button id="closeov">✕ Close</button><iframe id="ovframe" title="cached demo replay"></iframe></div>
+<div class="overlay" id="overlay"><button id="closeov">✕ Close</button> <span id="ovpick"></span><iframe id="ovframe" title="cached demo replay"></iframe></div>
 <script>
 const SID = location.pathname.split('/').filter(Boolean).pop();
 const $ = id => document.getElementById(id);
 $('title').textContent = `Balance session · ${SID}`;
 $('sessrep').href = `/session/${SID}/report`;
-let CACHED = '/viewer/?src=/cache/demo_IMG_9691/&jump=step'; // a cached live trial wins (tools/cache_trial.py)
-fetch('/cache/demo_live/meta.json', { method: 'HEAD' }).then(r => { if (r.ok) CACHED = '/viewer/?src=/cache/demo_live/&jump=step'; }).catch(() => {});
-$('prev').onclick = () => { $('ovframe').src = CACHED; $('overlay').style.display = 'block'; };
+// cached replays (tools/cache_trial.py); the IMG_9691 step-down is the default
+const CACHED = [['demo_IMG_9691', 'Step-down (default)'], ['demo_protocol_double', 'Feet together'],
+  ['demo_protocol_tandem', 'Tandem'], ['demo_protocol_single', 'Single leg'], ['demo_live', 'Last live trial']];
+const showCached = dir => { $('ovframe').src = `/viewer/?src=/cache/${dir}/&jump=step`; };
+CACHED.forEach(([dir, label]) => fetch(`/cache/${dir}/meta.json`, { method: 'HEAD' }).then(r => {
+  if (!r.ok) return;
+  const b = document.createElement('button'); b.textContent = label; b.onclick = () => showCached(dir); $('ovpick').append(b);
+}).catch(() => {}));
+$('prev').onclick = () => { showCached(CACHED[0][0]); $('overlay').style.display = 'block'; };
 $('closeov').onclick = () => { $('overlay').style.display = 'none'; $('ovframe').src = 'about:blank'; };
 
 // MediaPipe Pose skeleton

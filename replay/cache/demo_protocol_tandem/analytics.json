@@ -1,0 +1,269 @@
+{
+ "frames": 26,
+ "duration_s": 12.5,
+ "t_start_ms": 1791055681000.0,
+ "ap_estimated": true,
+ "margin": {
+  "min_cm": 2.04,
+  "min_at_ms": 1791055690998.3,
+  "median_cm": 4.13,
+  "time_outside_bos_s": 0.0,
+  "fraction_outside": 0.0,
+  "outside_episodes": [],
+  "frames_without_bos": 0,
+  "uncertain_below_cm": 3.87
+ },
+ "ml_sway": {
+  "rms_cm": 1.61,
+  "range_cm": 5.43,
+  "path_length_cm": 17.6,
+  "mean_speed_cm_s": 1.4,
+  "note": "COM x after 0.3 s Gaussian smoothing; path length depends on frame rate"
+ },
+ "ap_sway": {
+  "rms_cm": 4.63,
+  "range_cm": 18.3,
+  "path_length_cm": 56.9,
+  "mean_speed_cm_s": 4.55,
+  "estimated": true
+ },
+ "trunk_lean_deg": {
+  "ml_p5": -0.9,
+  "ml_p95": 16.0,
+  "ap_p5": 11.0,
+  "ap_p95": 17.5,
+  "ml_min": -1.9,
+  "ml_max": 20.2,
+  "ml_range": 22.1,
+  "ap_min": 10.4,
+  "ap_max": 17.8,
+  "ap_range": 7.4,
+  "ap_estimated": true,
+  "ml_max_at_ms": 1791055684998.3,
+  "ap_max_at_ms": 1791055684998.3,
+  "convention": "+ml toward patient's left (+x), +ap forward (toward camera)"
+ },
+ "stance": {
+  "available": true,
+  "seconds": {
+   "double_staggered": 6.0,
+   "double_tandem": 6.5
+  },
+  "segments": [
+   {
+    "stance": "double_staggered",
+    "start_ms": 1791055681000.0,
+    "end_ms": 1791055683998.3,
+    "duration_s": 3.25
+   },
+   {
+    "stance": "double_tandem",
+    "start_ms": 1791055684498.3,
+    "end_ms": 1791055685498.3,
+    "duration_s": 1.5
+   },
+   {
+    "stance": "double_staggered",
+    "start_ms": 1791055685998.3,
+    "end_ms": 1791055686998.3,
+    "duration_s": 1.5
+   },
+   {
+    "stance": "double_tandem",
+    "start_ms": 1791055687498.3,
+    "end_ms": 1791055690998.3,
+    "duration_s": 4.0
+   },
+   {
+    "stance": "double_staggered",
+    "start_ms": 1791055691498.3,
+    "end_ms": 1791055691998.3,
+    "duration_s": 1.0
+   },
+   {
+    "stance": "double_tandem",
+    "start_ms": 1791055692498.3,
+    "end_ms": 1791055692998.3,
+    "duration_s": 1.0
+   },
+   {
+    "stance": "double_staggered",
+    "start_ms": 1791055693498.3,
+    "end_ms": 1791055693498.3,
+    "duration_s": 0.25
+   }
+  ],
+  "method": "lowest heel/toe keypoint of each foot; up > 4.9 cm above the other foot, down < 2.4 cm",
+  "expected": {
+   "stance": "tandem",
+   "fraction_matching": 0.52,
+   "pass": false
+  }
+ },
+ "touchdowns": [],
+ "touchdowns_raw": [],
+ "series": {
+  "t_ms": [
+   1791055681000.0,
+   1791055681500.0,
+   1791055681998.3,
+   1791055682498.3,
+   1791055682998.3,
+   1791055683498.3,
+   1791055683998.3,
+   1791055684498.3,
+   1791055684998.3,
+   1791055685498.3,
+   1791055685998.3,
+   1791055686498.3,
+   1791055686998.3,
+   1791055687498.3,
+   1791055687998.3,
+   1791055688498.3,
+   1791055688998.3,
+   1791055689498.3,
+   1791055689998.3,
+   1791055690498.3,
+   1791055690998.3,
+   1791055691498.3,
+   1791055691998.3,
+   1791055692498.3,
+   1791055692998.3,
+   1791055693498.3
+  ],
+  "trunk_ml_deg": [
+   -0.4,
+   0.0,
+   0.2,
+   -0.0,
+   -0.7,
+   -0.1,
+   6.8,
+   18.8,
+   20.2,
+   7.9,
+   -1.9,
+   -0.4,
+   0.8,
+   0.9,
+   1.2,
+   1.0,
+   -0.9,
+   -0.4,
+   1.0,
+   1.8,
+   2.1,
+   2.6,
+   2.7,
+   2.7,
+   2.7,
+   2.9
+  ],
+  "trunk_ap_deg": [
+   10.4,
+   10.8,
+   11.3,
+   11.7,
+   12.5,
+   12.2,
+   12.8,
+   16.6,
+   17.8,
+   17.8,
+   16.0,
+   13.1,
+   12.2,
+   12.8,
+   12.9,
+   12.7,
+   13.5,
+   14.3,
+   14.4,
+   14.5,
+   15.4,
+   16.3,
+   16.2,
+   16.0,
+   15.6,
+   14.9
+  ],
+  "stance": [
+   "double_staggered",
+   "double_staggered",
+   "double_staggered",
+   "double_staggered",
+   "double_staggered",
+   "double_staggered",
+   "double_staggered",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_staggered",
+   "double_staggered",
+   "double_staggered",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_tandem",
+   "double_staggered",
+   "double_staggered",
+   "double_tandem",
+   "double_tandem",
+   "double_staggered"
+  ],
+  "outside_cum_s": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "noise_floor_cm": {
+  "x": 1.29,
+  "y": 1.22,
+  "z": 1.98
+ },
+ "events": [],
+ "quality": {
+  "label": "fair",
+  "reasons": [
+   "noise_x_cm 1.29 > 1.0"
+  ],
+  "metrics": {
+   "reprojection_median_px": 11.4,
+   "noise_x_cm": 1.29,
+   "dropped_frac": 0.0,
+   "ground_anchor_median_cm": 0.75
+  },
+  "forward_back": "estimated",
+  "floor_source": "sole_vertices",
+  "contact_band_cm": 3.5,
+  "gravity_vs_feet_deg": null
+ }
+}

@@ -20,7 +20,7 @@ def _margin_col(m):
 
 def render(session: dict, rows: list[dict]) -> str:
     rows = sorted(rows, key=lambda r: (STANCE_ORDER.get(r["stance"], 9), r["trial"]))
-    body, total_err, any_est, mock = [], 0, False, False
+    body, total_err, any_est, mock, warnings, scored = [], 0, False, False, [], False
     for r in rows:
         a, m, end, st = r["analytics"] or {}, r["meta"] or {}, r["end"] or {}, r["status"] or {}
         bess = (end.get("bess") or {})
@@ -28,9 +28,12 @@ def render(session: dict, rows: list[dict]) -> str:
         if errs is None and end.get("events") is not None:  # count counted BESS errors from the event list
             errs = sum(1 for e in end["events"] if e.get("counted") and e.get("kind") not in ("foot_down",))
         total_err += errs or 0
+        scored |= errs is not None
         mg, ml, q = a.get("margin", {}), a.get("ml_sway", {}), a.get("quality", {})
         any_est |= q.get("forward_back") == "estimated"
         mock |= bool((m.get("quality") or {}).get("MOCK_FAL") or (m.get("quality") or {}).get("SYNTHETIC"))
+        if m.get("warning") and m["warning"] not in warnings:
+            warnings.append(m["warning"])
         cov = m.get("coverage") or {}
         cov_txt = f'{cov.get("done", "–")}/{cov.get("received", "–")} frames ({cov.get("stage", st.get("stage", "–"))})' if cov else st.get("stage", "–")
         unc = mg.get("min_cm") is not None and abs(mg["min_cm"]) < mg.get("uncertain_below_cm", 0)
@@ -62,8 +65,9 @@ a{{color:#0284c7;font-weight:700}} @media print{{body{{background:#fff}} .page{{
 </style></head><body><div class="page">
 <header><h1>Balance session summary</h1><div class="sub">session {html.escape(session.get("id", ""))} · {created} · {len(rows)} trial(s)</div></header>
 {'<div class="mock">fal MOCK / SYNTHETIC data: 3D poses are stand-ins from a stored run, so sway, margin and time outside BOS are not meaningful. Rehearsal only.</div>' if mock else ''}
+{''.join(f'<div class="note">{html.escape(w)}</div>' for w in warnings)}
 <div class="note">Shortened 10 s demo protocol (standard BESS uses 20 s per stance). Scores are not comparable to published BESS norms.</div>
-<p>Total BESS errors (posecam): <span class="total">{total_err}</span></p>
+<p>Total BESS errors (posecam): <span class="total">{total_err if scored else "–"}</span>{"" if scored else ' <span class="sub">(not scored: offline recording, posecam did not run)</span>'}</p>
 <table><thead><tr><th>Stance</th><th>BESS errors</th><th>Side-to-side sway (RMS)</th><th>Min margin</th><th>Time outside BOS</th><th>Quality · frames</th><th>Replay</th></tr></thead>
 <tbody>{"".join(body) or '<tr><td colspan="7">No trials yet.</td></tr>'}</tbody></table>
 <footer><b>How to read this.</b> BESS errors are counted by posecam (MediaPipe 2D landmarks, live). Sway, margin of stability

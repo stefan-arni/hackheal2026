@@ -57,6 +57,8 @@ async def main(args: argparse.Namespace) -> int:
     todo = [(i, f) for i, f in indexed if args.force or not (args.out / f"{f.stem}.json").exists()]
 
     cache, budget = FalCache(), Budget(override=args.override_budget)
+    if args.max_usd is not None:  # hard stop for this invocation, retries included; never overridable
+        budget.max_session_calls = int(args.max_usd / budget.price()[0] + 1e-9)
     # timestamps.json (from extract_frames_by_index.py) beats the uniform-fps assumption
     stamps_path = args.frames / "timestamps.json"
     stamps = json.loads(stamps_path.read_text()) if stamps_path.exists() else {}
@@ -155,5 +157,6 @@ if __name__ == "__main__":
     p.add_argument("--force", action="store_true", help="re-process frames that already have output (still cache-first)")
     p.add_argument("--live", action="store_true", help="allow billed fal calls for frames not in the cache")
     p.add_argument("--yes", action="store_true", help="don't ask before sending a live batch")
+    p.add_argument("--max-usd", type=float, default=None, help="hard stop: at most this many dollars of calls in this run")
     p.add_argument("--override-budget", action="store_true", help="allow exceeding the 500-total / 80-per-run caps")
     sys.exit(asyncio.run(main(p.parse_args())))

@@ -68,7 +68,8 @@ def main(a: argparse.Namespace) -> None:
             fr["src_url"] = f"frames/{stem}_src.jpg"
         frames.append(fr)
     stats = analytics.compute(res, ev["events"], a.expected_stance)
-    meta = bundle.write_bundle(a.out, a.out.name, res, events=ev["events"], frames=frames, analytics=stats)
+    meta = bundle.write_bundle(a.out, a.out.name, res, events=ev["events"], frames=frames, analytics=stats,
+                               extra_meta={"warning": a.warning, "stance": a.stance} if (a.warning or a.stance) else None)
     t_rep = time.perf_counter()
     xv = json.loads(a.cross_validation.read_text()) if a.cross_validation else None
     report.write_report(a.out, meta, stats, res, title=a.title, cross_validation=xv)
@@ -93,5 +94,7 @@ if __name__ == "__main__":
     p.add_argument("--expected-stance", default=None, help="double | tandem | single_left | single_right")
     p.add_argument("--frames-dir", type=Path, default=None, help="images that were sent to fal (for the video overlay)")
     p.add_argument("--title", default=None, help="report title (default: bundle name)")
+    p.add_argument("--warning", default=None, help="shown at the top of the report (e.g. camera moved)")
+    p.add_argument("--stance", default=None, help="double | tandem | single (for the session summary)")
     p.add_argument("--cross-validation", type=Path, default=None, help="tools/cross_validate.py output for the footer")
     main(p.parse_args())
