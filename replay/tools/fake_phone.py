@@ -7,6 +7,9 @@ Sends input/<stem>.jpg at each frame's timestamp (phone clock = wall-clock ms at
 + t_ms), POSTs /end with the events (from ground_truth.json when present, as the
 metrics pipeline would), then polls /status and reports how long after the trial ended
 the replay was ready.
+
+Never spends fal credit by itself: the service is cache-only unless it was started with
+REPLAY_LIVE=1 REPLAY_YES=1. For SYNTHETIC rehearsals start it with REPLAY_MOCK_FAL.
 """
 
 from __future__ import annotations
@@ -65,6 +68,9 @@ def main(a: argparse.Namespace) -> None:
                 break
             time.sleep(0.2)
     print(f"\n{st['state'].upper()} {time.perf_counter() - t_end:.2f}s after trial end: {json.dumps(st)}")
+    if st.get("missing_from_cache"):
+        print(f"\n!!! {len(st['missing_from_cache'])} frames MISSING from the fal cache (service is {st.get('fal_mode')}); "
+              "nothing was sent for them:\n  " + "\n  ".join(st["missing_from_cache"]))
     if st["state"] == "ready":
         print(f"bundle on disk: data/trials/{trial}/  ->  {a.url}/viewer/?src=/replay/{trial}/")
 

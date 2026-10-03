@@ -1,7 +1,13 @@
 """FastAPI service: ingest frames, call fal, post-process, serve bundles.
 
-    uv run uvicorn service.app:app --port 8017                                          # real fal
-    REPLAY_MOCK_FAL=data/fal_out/synthetic uv run uvicorn service.app:app --port 8017   # offline
+    uv run uvicorn service.app:app --port 8017                                          # cache only (default)
+    REPLAY_LIVE=1 REPLAY_YES=1 uv run uvicorn service.app:app --port 8017               # billed fal calls allowed
+    REPLAY_MOCK_FAL=data/fal_out/synthetic uv run uvicorn service.app:app --port 8017   # offline mock
+
+fal budget: frames are looked up in the shared cache (data/fal_cache) first. Without
+REPLAY_LIVE=1 nothing is sent and cache misses are listed in /status. Live mode also needs
+REPLAY_YES=1 (the server can't prompt per batch); caps are 500 calls total / 80 per trial
+(REPLAY_BUDGET_OVERRIDE=1 to exceed) and only 3 calls until the price is confirmed.
 
 Ports: 8017 (8000 is often taken; posecam uses 8765 pose / 8766 eyes).
 
@@ -38,7 +44,9 @@ from PIL import Image
 from pydantic import BaseModel
 
 from service import bundle, pipeline
-from service.fal_client_wrap import REPLAY_ROOT, SamBodyClient
+from service.fal_budget import Budget, BudgetError
+from service.fal_client_wrap import REPLAY_ROOT, CacheMiss, SamBodyClient
+from service.fal_mock import MockFal
 from service.runs import DEFAULT_CONVENTIONS, load_records, write_frame, write_summary
 
 log = logging.getLogger("replay")
@@ -48,13 +56,22 @@ TRIALS_DIR = Path(os.environ.get("REPLAY_TRIALS_DIR", REPLAY_ROOT / "data/trials
 MOCK_RUN = os.environ.get("REPLAY_MOCK_FAL")
 CONVENTIONS: dict | None = None  # None -> pipeline looks for data/conventions.json
 
+LIVE = os.environ.get("REPLAY_LIVE") == "1"
+BUDGET = Budget(override=os.environ.get("REPLAY_BUDGET_OVERRIDE") == "1")
+BACKEND = None
 if MOCK_RUN:
-    from service import fal_mock
-
     mock_dir = Path(MOCK_RUN) if Path(MOCK_RUN).is_absolute() else REPLAY_ROOT / MOCK_RUN
-    log.warning("fal is MOCKED from %s (%d frames)", mock_dir, fal_mock.install(mock_dir))
+    BACKEND = MockFal(mock_dir)
+    log.warning("fal is MOCKED from %s (%d frames); nothing billed or cached", mock_dir, len(BACKEND.index))
     conv_file = mock_dir / "conventions.json"
     CONVENTIONS = json.loads(conv_file.read_text()) if conv_file.exists() else DEFAULT_CONVENTIONS
+elif LIVE:
+    if os.environ.get("REPLAY_YES") != "1":
+        raise SystemExit("REPLAY_LIVE=1 also needs REPLAY_YES=1: the service can't ask before each batch. "
+                         f"Budget now: {BUDGET.status_line()}")
+    log.warning("fal LIVE: billed calls allowed. %s", BUDGET.status_line())
+else:
+    log.warning("fal CACHE-ONLY: frames not in data/fal_cache will be reported missing (REPLAY_LIVE=1 to pay)")
 
 app = FastAPI(title="Instant Replay")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -64,8 +81,8 @@ _sam: SamBodyClient | None = None
 
 def sam() -> SamBodyClient:
     global _sam
-    if _sam is None:
-        _sam = SamBodyClient(concurrency=int(os.environ.get("REPLAY_FAL_CONCURRENCY", 8)))
+    if _sam is None:  # one client: the fal concurrency limit is per account, shared across trials
+        _sam = SamBodyClient(live=LIVE, run="service", budget=BUDGET, backend=BACKEND)
     return _sam
 
 
@@ -79,6 +96,7 @@ class Trial:
     received: int = 0
     done: int = 0
     failed: int = 0
+    missing: list[str] = field(default_factory=list)  # frames not in the cache (cache-only mode)
     t_end: float | None = None
     t_ready: float | None = None
     aligned: bool | None = None
@@ -107,12 +125,19 @@ async def run_frame(trial: Trial, stem: str, jpeg: bytes, mask: bytes | None, t_
     try:
         with Image.open(io.BytesIO(jpeg)) as im:
             size = list(im.size)
-        res = await sam().reconstruct(jpeg, mask)
+        res = await sam().reconstruct(jpeg, mask, run=trial.id)
         write_frame(
             trial.frames_dir, stem, t_ms=t_ms, image_size=size, response=res.response,
             latency_s=res.latency_s, ply=res.ply, visualization=res.visualization, extra=extra,
         )
         trial.done += 1
+    except CacheMiss as e:
+        trial.failed += 1
+        trial.missing.append(stem)
+        log.warning("trial %s frame %s MISSING from fal cache (sha1 %s); not sent (cache-only)", trial.id, stem, e.key[:12])
+    except BudgetError as e:
+        trial.failed += 1
+        log.error("trial %s frame %s not sent: %s", trial.id, stem, e)
     except Exception:
         trial.failed += 1
         log.exception("trial %s frame %s failed", trial.id, stem)
@@ -120,7 +145,11 @@ async def run_frame(trial: Trial, stem: str, jpeg: bytes, mask: bytes | None, t_
 
 @app.post("/replay/warmup")
 async def warmup(jpeg: UploadFile = File(...)) -> dict:
-    return {"latency_s": await sam().warmup(await jpeg.read())}
+    """Cached frames cost nothing; a new frame is one billed call (live mode only)."""
+    try:
+        return {"latency_s": await sam().warmup(await jpeg.read())}
+    except CacheMiss as e:
+        raise HTTPException(409, f"warmup frame not cached and fal is not live: {e.key[:12]}")
 
 
 @app.post("/replay/{trial_id}/frame")
@@ -165,6 +194,12 @@ class EndPayload(BaseModel):
 async def finalize(trial: Trial, payload: EndPayload) -> None:
     try:
         await asyncio.gather(*trial.tasks)  # stragglers
+        if trial.missing:
+            log.warning("trial %s: %d/%d frames missing from fal cache: %s", trial.id, len(trial.missing),
+                        trial.received, ", ".join(trial.missing))
+        if trial.done == 0:
+            raise RuntimeError(f"no frames reconstructed ({len(trial.missing)} missing from fal cache, "
+                               f"{trial.failed} failed); see /status")
         write_summary(trial.frames_dir, {"trialId": trial.id})
         run = await asyncio.to_thread(pipeline.load_run, trial.frames_dir, CONVENTIONS)
         try:
@@ -209,7 +244,8 @@ async def post_end(trial_id: str, payload: EndPayload) -> dict:
     trial.state, trial.t_end = "processing", time.time()
     (trial.dir / "end.json").write_text(payload.model_dump_json())
     asyncio.create_task(finalize(trial, payload))
-    return {"status": "processing", "received": trial.received, "inflight": trial.received - trial.done - trial.failed}
+    return {"status": "processing", "received": trial.received, "inflight": trial.received - trial.done - trial.failed,
+            "missing_from_cache": trial.missing}
 
 
 @app.get("/replay/{trial_id}/status")
@@ -217,7 +253,8 @@ async def status(trial_id: str) -> dict:
     tr = get_trial(trial_id)
     return {
         "trialId": tr.id, "state": tr.state, "received": tr.received, "done": tr.done, "failed": tr.failed,
-        "aligned": tr.aligned, "error": tr.error,
+        "aligned": tr.aligned, "error": tr.error, "missing_from_cache": tr.missing,
+        "fal_mode": "mock" if BACKEND else ("live" if LIVE else "cache-only"),
         "ready_after_end_s": round(tr.t_ready - tr.t_end, 2) if tr.t_ready and tr.t_end else None,
         "url": f"/replay/{tr.id}/" if tr.state == "ready" else None,
     }

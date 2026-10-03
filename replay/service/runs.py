@@ -40,9 +40,13 @@ def to_camera(points: np.ndarray, cam_t: np.ndarray, flip: str, add_cam_t: bool)
 RESERVED_JSON = {"summary.json", "conventions.json", "noise_floor.json", "ground_truth.json"}
 
 
-def mesh_counts(ply: bytes) -> tuple[int, int]:
-    mesh = trimesh.load(io.BytesIO(ply), file_type="ply", process=False)
-    return len(mesh.vertices), len(mesh.faces)
+def mesh_counts(ply: bytes) -> tuple[int, int] | None:
+    """(vertices, faces), or None if the bytes aren't a readable mesh."""
+    try:
+        mesh = trimesh.load(io.BytesIO(ply), file_type="ply", process=False)
+        return len(mesh.vertices), len(mesh.faces)
+    except Exception:
+        return None
 
 
 def vis_extension(response: dict[str, Any]) -> str:
@@ -85,7 +89,11 @@ def write_frame(
     }
     if ply is not None:
         (out / f"{stem}.ply").write_bytes(ply)
-        record["vertex_count"], record["face_count"] = mesh_counts(ply)
+        counts = mesh_counts(ply)
+        if counts is None:
+            record["usable"], record["mesh_error"] = False, "unreadable .ply"
+        else:
+            record["vertex_count"], record["face_count"] = counts
     if visualization is not None:
         record["vis_file"] = f"{stem}_vis{vis_extension(response)}"
         (out / record["vis_file"]).write_bytes(visualization)
