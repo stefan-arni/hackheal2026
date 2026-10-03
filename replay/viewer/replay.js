@@ -34,11 +34,21 @@ async function pool(items, n, fn) {
   return out;
 }
 
+function halfToFloat(u16) { // IEEE 754 binary16 -> Float32Array (no Float16Array dependency)
+  const out = new Float32Array(u16.length);
+  for (let i = 0; i < u16.length; i++) {
+    const h = u16[i], s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, f = h & 0x3ff;
+    out[i] = e === 0 ? s * 5.960464477539063e-8 * f : e === 31 ? (f ? NaN : s * Infinity) : s * Math.pow(2, e - 15) * (1 + f / 1024);
+  }
+  return out;
+}
+
 async function loadBundle(src, meta, progress) {
   progress(0.3);
   const [facesBuf, vertsBuf] = await Promise.all([fetchOk(src + 'faces.bin', 'buf'), fetchOk(src + 'verts.bin', 'buf')]);
   progress(1);
-  const V = meta.vertex_count, all = new Float32Array(vertsBuf);
+  const V = meta.vertex_count;
+  const all = meta.verts_dtype === 'float16' ? halfToFloat(new Uint16Array(vertsBuf)) : new Float32Array(vertsBuf);
   const frames = meta.t.map((_, i) => all.subarray(i * V * 3, (i + 1) * V * 3));
   return {
     kind: 'bundle', meta, t: meta.t, frames, index: new Uint32Array(facesBuf),
@@ -49,6 +59,8 @@ async function loadBundle(src, meta, progress) {
 
 async function loadRunFolder(src, progress) {
   const summary = await fetchOk(src + 'summary.json');
+  const conv = await fetch(src + 'conventions.json').then(r => (r.ok ? r.json() : null)).catch(() => null);
+  const meshYUp = conv?.mesh?.flip === 'flip_yz'; // real fal .ply: camera frame with y and z flipped already
   const list = summary.frames.filter(f => f.usable);
   if (!list.length) throw new Error('run folder has no usable frames');
   const loader = new PLYLoader();
@@ -59,7 +71,8 @@ async function loadRunFolder(src, progress) {
     if (V === null) { V = p.length / 3; index = geo.index ? geo.index.array : null; }
     if (p.length / 3 !== V) throw new Error(`${f.stem}: vertex count changed (${p.length / 3} vs ${V})`);
     const out = new Float32Array(p.length);
-    for (let i = 0; i < p.length; i += 3) { out[i] = p[i]; out[i + 1] = -p[i + 1]; out[i + 2] = -p[i + 2]; } // OpenCV -> y up
+    const sgn = meshYUp ? 1 : -1; // OpenCV (y down) -> y up, unless the mesh is y-up already
+    for (let i = 0; i < p.length; i += 3) { out[i] = p[i]; out[i + 1] = sgn * p[i + 1]; out[i + 2] = sgn * p[i + 2]; }
     progress(++done / list.length);
     return out;
   });
@@ -97,6 +110,21 @@ function marginColor(m) {
 function ribbon(width, color, onTop = false) { // thick floor line segment, unit length along x
   const m = new THREE.Mesh(new THREE.BoxGeometry(1, 0.002, width), new THREE.MeshBasicMaterial({ color, depthTest: !onTop }));
   m.renderOrder = onTop ? 5 : 1;
+  return m;
+}
+
+function label(text, x, y, z, scale = 1) { // flat text lying on the floor, readable from the front
+  const c = document.createElement('canvas'), ctx = c.getContext('2d');
+  const font = 'bold 64px system-ui, sans-serif';
+  ctx.font = font;
+  c.width = Math.max(256, Math.ceil(ctx.measureText(text).width) + 32); c.height = 96;
+  ctx.font = font; ctx.fillStyle = '#cbd5e1'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, c.width / 2, 48);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1 * scale * c.width / 256, 0.0375 * scale), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, y + 0.001, z);
   return m;
 }
 
@@ -195,31 +223,75 @@ export async function mountReplay(element, src, { onSeek, title = 'Instant Repla
   const fit = (0.62 * (bb.max.y - Math.min(bb.min.y, floorY))) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const radius = Math.max(data.aligned ? 3.0 : target.length(), fit);
 
-  // thick grid
+  // floor grid. Aligned bundles: gravity-aligned metric grid around the feet (1 cm minor lines,
+  // thick 10 cm major lines, labelled in cm). Raw camera-frame data: a coarse reference grid.
   const grid = new THREE.Group();
-  for (let k = -6; k <= 6; k++) {
-    const w = k === 0 ? 0.014 : 0.007, c = k === 0 ? COLORS.axis : COLORS.grid;
-    const a = ribbon(w, c); placeRibbon(a, [target.x - 1.5, target.z + k * 0.25], [target.x + 1.5, target.z + k * 0.25], floorY); grid.add(a);
-    const b = ribbon(w, c); placeRibbon(b, [target.x + k * 0.25, target.z - 1.5], [target.x + k * 0.25, target.z + 1.5], floorY); grid.add(b);
+  if (data.aligned) {
+    const R = 0.6, minor = [];
+    for (let k = -60; k <= 60; k++) {
+      if (k % 10 === 0) continue;
+      const v = k / 100;
+      minor.push(-R, floorY, v, R, floorY, v, v, floorY, -R, v, floorY, R);
+    }
+    const mg = new THREE.BufferGeometry();
+    mg.setAttribute('position', new THREE.Float32BufferAttribute(minor, 3));
+    grid.add(new THREE.LineSegments(mg, new THREE.LineBasicMaterial({ color: COLORS.grid, transparent: true, opacity: 0.35 })));
+    for (let k = -6; k <= 6; k++) {
+      const v = k / 10, w = k === 0 ? 0.008 : 0.004, c = k === 0 ? COLORS.axis : 0x475569;
+      const a = ribbon(w, c); placeRibbon(a, [-R, v], [R, v], floorY); grid.add(a);
+      const b = ribbon(w, c); placeRibbon(b, [v, -R], [v, R], floorY); grid.add(b);
+      if (k !== 0) {
+        grid.add(label(`${k * 10}`, v, floorY, R + 0.06, 1.8));   // along x, at the front edge
+        grid.add(label(`${k * 10}`, R + 0.1, floorY, v, 1.8));    // along z, at the right edge
+      }
+    }
+    grid.add(label('x cm', 0.05, floorY, R + 0.15, 2), label('z cm', R + 0.22, floorY, 0.05, 2));
+    grid.add(label('1 cm / 10 cm grid', -R + 0.25, floorY, -R - 0.09, 2.6));
+  } else {
+    for (let k = -6; k <= 6; k++) {
+      const w = k === 0 ? 0.014 : 0.007, c = k === 0 ? COLORS.axis : COLORS.grid;
+      const a = ribbon(w, c); placeRibbon(a, [target.x - 1.5, target.z + k * 0.25], [target.x + 1.5, target.z + k * 0.25], floorY); grid.add(a);
+      const b = ribbon(w, c); placeRibbon(b, [target.x + k * 0.25, target.z - 1.5], [target.x + k * 0.25, target.z + 1.5], floorY); grid.add(b);
+    }
   }
   scene.add(grid);
 
   // COM / BOS overlays (bundles with metrics only)
   const meta = data.meta, hasCom = !!(meta && meta.com), hasBos = !!(meta && meta.bos);
   const overlayY = floorY + 0.004;
-  const comDot = new THREE.Mesh(new THREE.CircleGeometry(0.03, 32), new THREE.MeshBasicMaterial({ color: 0x22c55e, depthTest: false }));
-  comDot.rotation.x = -Math.PI / 2; comDot.renderOrder = 7; comDot.visible = hasCom; scene.add(comDot);
+  // COM dot: drawn last (transparent pass, after the BOS fill), with a white ring for contrast
+  const comDot = new THREE.Mesh(new THREE.CircleGeometry(0.022, 40), new THREE.MeshBasicMaterial({ color: 0x22c55e, depthTest: false, transparent: true }));
+  comDot.rotation.x = -Math.PI / 2; comDot.renderOrder = 8; comDot.visible = hasCom; scene.add(comDot);
+  const comRing = new THREE.Mesh(new THREE.RingGeometry(0.022, 0.029, 40), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+  comRing.rotation.x = -Math.PI / 2; comRing.renderOrder = 8; comRing.visible = hasCom; scene.add(comRing);
   const trail = Array.from({ length: 24 }, (_, i) => {
-    const m = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.9 * (1 - i / 24), depthTest: false }));
+    const m = new THREE.Mesh(new THREE.CircleGeometry(0.007, 16), new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.9 * (1 - i / 24), depthTest: false }));
     m.rotation.x = -Math.PI / 2; m.renderOrder = 6; m.visible = false; scene.add(m); return m;
   });
-  const bosEdges = Array.from({ length: 64 }, () => { const r = ribbon(0.016, COLORS.bos, true); r.visible = false; scene.add(r); return r; });
+  const bosEdges = Array.from({ length: 64 }, () => { const r = ribbon(0.006, COLORS.bos, true); r.visible = false; scene.add(r); return r; });
+  const bosFill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
+    color: COLORS.bos, transparent: true, opacity: 0.28, depthTest: false, side: THREE.DoubleSide }));
+  bosFill.renderOrder = 4; scene.add(bosFill);
 
   // --- camera presets with eased spherical transitions ---
-  const view = { az: 0, el: VIEWS.front.el, r: radius };
+  // Each preset has its own look-at point and distance. Aligned top view = 3D stabilogram: look
+  // straight down at the feet so the base of support and COM trail fill the screen.
+  const body = target.clone();
+  const presetFor = name => (name === 'top' && data.aligned
+    ? { tx: 0, ty: floorY, tz: 0, r: 3.0, op: 0.18 }
+    : { tx: body.x, ty: body.y, tz: body.z, r: radius, op: 1 });
+  const view = { az: 0, el: VIEWS.front.el, ...presetFor('front') };
   let tween = null, viewName = 'front';
   function applyView() {
     const az = THREE.MathUtils.degToRad(view.az), elv = THREE.MathUtils.degToRad(view.el);
+    target.set(view.tx, view.ty, view.tz);
+    mesh.material.opacity = view.op; // body fades in the top view so the BOS / COM stay visible
+    const fade = view.op < 0.999;
+    if (mesh.material.transparent !== fade) {
+      mesh.material.transparent = fade;
+      mesh.material.depthWrite = !fade;
+      mesh.material.needsUpdate = true;
+    }
     camera.position.set(target.x + view.r * Math.cos(elv) * Math.sin(az), target.y + view.r * Math.sin(elv), target.z + view.r * Math.cos(elv) * Math.cos(az));
     camera.lookAt(target);
   }
@@ -227,7 +299,7 @@ export async function mountReplay(element, src, { onSeek, title = 'Instant Repla
     const to = VIEWS[name];
     if (!to) return;
     let daz = ((to.az - view.az + 540) % 360) - 180; // shortest way round
-    tween = { t0: performance.now(), from: { ...view }, to: { az: view.az + daz, el: to.el, r: radius } };
+    tween = { t0: performance.now(), from: { ...view }, to: { az: view.az + daz, el: to.el, ...presetFor(name) } };
     viewName = name;
     viewButtons.forEach((b, n) => b.classList.toggle('on', n === name));
   }
@@ -312,12 +384,21 @@ export async function mountReplay(element, src, { onSeek, title = 'Instant Repla
     if (hasCom) {
       const c = meta.com[i];
       comDot.position.set(c[0], overlayY + 0.002, c[2]);
+      comRing.position.copy(comDot.position);
       comDot.material.color.copy(marginColor(meta.margin?.[i]));
       trail.forEach((m, k) => { const j = i - k - 1; m.visible = j >= 0; if (j >= 0) m.position.set(meta.com[j][0], overlayY, meta.com[j][2]); });
     }
     if (hasBos) {
       const h = meta.bos[i] || [];
       bosEdges.forEach((r, k) => { if (k < h.length) placeRibbon(r, h[k], h[(k + 1) % h.length], overlayY); else r.visible = false; });
+      if (h.length >= 3) { // filled polygon (convex hull -> triangle fan)
+        const pos = [];
+        for (let k = 1; k < h.length - 1; k++) pos.push(h[0][0], overlayY, h[0][1], h[k][0], overlayY, h[k][1], h[k + 1][0], overlayY, h[k + 1][1]);
+        bosFill.geometry.dispose();
+        bosFill.geometry = new THREE.BufferGeometry();
+        bosFill.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        bosFill.visible = true;
+      } else bosFill.visible = false;
     }
   }
 
@@ -338,7 +419,7 @@ export async function mountReplay(element, src, { onSeek, title = 'Instant Repla
     if (playing) { playhead += dt * speed; if (playhead > tEnd) playhead = 0; }
     if (tween) {
       const x = Math.min((now - tween.t0) / TRANSITION_MS, 1), e = ease(x);
-      for (const k of ['az', 'el', 'r']) view[k] = tween.from[k] + (tween.to[k] - tween.from[k]) * e;
+      for (const k of ['az', 'el', 'r', 'tx', 'ty', 'tz', 'op']) view[k] = tween.from[k] + (tween.to[k] - tween.from[k]) * e;
       if (x >= 1) tween = null;
     }
     applyView();

@@ -19,6 +19,8 @@ delivered), so it can't double-bill.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import heapq
 import os
 import time
 from pathlib import Path
@@ -47,6 +49,50 @@ REPLAY_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(REPLAY_ROOT / ".env")
 
 __all__ = ["SamBodyClient", "SamResult", "CacheMiss", "FalSubmitError", "ENDPOINT", "PARAMS", "REPLAY_ROOT"]
+
+
+class PrioritySemaphore:
+    """Like asyncio.Semaphore, but waiters with a lower priority number go first (FIFO within a
+    priority). Live trials send error-burst frames at priority 0 and uniform frames at 1, so a
+    burst never queues behind uniform frames already waiting for a fal slot."""
+
+    def __init__(self, value: int):
+        self._value = value
+        self._waiters: list[tuple[int, int, asyncio.Future]] = []
+        self._seq = 0
+
+    @contextlib.asynccontextmanager
+    async def __call__(self, priority: int = 1):
+        await self.acquire(priority)
+        try:
+            yield
+        finally:
+            self.release()
+
+    async def acquire(self, priority: int = 1) -> None:
+        if self._value > 0 and not self._waiters:
+            self._value -= 1
+            return
+        fut = asyncio.get_running_loop().create_future()
+        self._seq += 1
+        heapq.heappush(self._waiters, (priority, self._seq, fut))
+        try:
+            await fut
+        except asyncio.CancelledError:
+            if fut.done() and not fut.cancelled():
+                self.release()  # we were handed a slot while being cancelled: give it back
+            else:
+                self._waiters = [w for w in self._waiters if w[2] is not fut]
+                heapq.heapify(self._waiters)
+            raise
+
+    def release(self) -> None:
+        while self._waiters:
+            _, _, fut = heapq.heappop(self._waiters)
+            if not fut.done():
+                fut.set_result(None)  # hand the slot over directly
+                return
+        self._value += 1
 
 
 class CacheMiss(LookupError):
@@ -83,7 +129,7 @@ class SamBodyClient:
         self.cache = cache if cache is not None else (None if backend else FalCache())
         self.budget = budget if budget is not None else Budget()
         n = concurrency or int(os.environ.get("REPLAY_FAL_CONCURRENCY", DEFAULT_CONCURRENCY))
-        self._sem = asyncio.Semaphore(n)
+        self._sem = PrioritySemaphore(n)
         self._timeout = timeout_s
         self._http = httpx.AsyncClient(timeout=timeout_s, follow_redirects=True)
         self._inflight: dict[str, asyncio.Future] = {}
@@ -105,8 +151,10 @@ class SamBodyClient:
 
     # --- public ----------------------------------------------------------------
 
-    async def reconstruct(self, jpeg: bytes, mask_png: bytes | None = None, *, run: str | None = None) -> SamResult:
-        """`run` (default self.run) is what the per-run budget cap counts against."""
+    async def reconstruct(self, jpeg: bytes, mask_png: bytes | None = None, *, run: str | None = None,
+                          priority: int = 1) -> SamResult:
+        """`run` (default self.run) is what the per-run budget cap counts against; `priority` 0
+        (error bursts) is served before 1 (uniform frames) when fal slots are scarce."""
         key = image_key(jpeg, mask_png)
         if self.cache is not None and (hit := self.cache.get(key)) is not None:
             return hit
@@ -115,7 +163,7 @@ class SamBodyClient:
         fut = asyncio.get_running_loop().create_future()
         self._inflight[key] = fut
         try:
-            res = await self._reconstruct_uncached(key, jpeg, mask_png, run or self.run)
+            res = await self._reconstruct_uncached(key, jpeg, mask_png, run or self.run, priority)
             fut.set_result(res)
             return res
         except BaseException as e:
@@ -137,18 +185,19 @@ class SamBodyClient:
             args["mask_url"] = fal_client.encode(mask_png, "image/png")
         return args
 
-    async def _reconstruct_uncached(self, key: str, jpeg: bytes, mask_png: bytes | None, run: str) -> SamResult:
+    async def _reconstruct_uncached(self, key: str, jpeg: bytes, mask_png: bytes | None, run: str,
+                                    priority: int = 1) -> SamResult:
         t0 = time.perf_counter()
         request_id = None
         if self.backend is not None:
-            async with self._sem:
+            async with self._sem(priority):
                 response = await self.backend.call(self._arguments(jpeg, mask_png))
         elif (pending := self.budget.pending_request_id(key)) is not None:
             # Already paid for: fetch that result instead of submitting again.
             if self._fal is None:
                 raise CacheMiss(key)
             try:
-                async with self._sem:
+                async with self._sem(priority):
                     handle = await self._fal.get_handle(ENDPOINT, pending)
                     response, request_id = await handle.get(), pending
             except Exception as e:
@@ -160,7 +209,7 @@ class SamBodyClient:
         elif not self.live:
             raise CacheMiss(key)
         else:
-            async with self._sem:  # bounds requests in flight at fal (submit + processing)
+            async with self._sem(priority):  # bounds requests in flight at fal (submit + processing)
                 async with self.budget.reserve(run):
                     handle = await self._submit(key, self._arguments(jpeg, mask_png), run)
                 request_id = handle.request_id
@@ -177,7 +226,7 @@ class SamBodyClient:
             self.budget.log("done", key=key, run=run, request_id=request_id, billed=False,
                             latency_s=round(latency, 3), num_people=res.num_people)
         if self.cache is not None:
-            self.cache.put(key, res, params=PARAMS, vis_ext=vis_extension(response))
+            self.cache.put(key, res, params=PARAMS, vis_ext=vis_extension(response, res.visualization))
         return res
 
     async def _submit(self, key: str, arguments: dict[str, Any], run: str) -> fal_client.AsyncRequestHandle:

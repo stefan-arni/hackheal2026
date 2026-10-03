@@ -266,6 +266,14 @@ def test_margin_components_rectangle():
     assert fwd == pytest.approx(0.05)
 
 
+def test_margin_components_outside_is_negative_offset_to_nearest_point():
+    rect = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]])
+    side, fwd = g.margin_components(np.array([2.5, 0.5]), rect)  # nearest point (2, 0.5)
+    assert side == pytest.approx(-0.5) and fwd == pytest.approx(0.0)
+    side, fwd = g.margin_components(np.array([3.0, 2.0]), rect)  # nearest point: corner (2, 1)
+    assert side == pytest.approx(-1.0) and fwd == pytest.approx(-1.0)
+
+
 # --- 10. sway heatmap -------------------------------------------------------------------
 
 

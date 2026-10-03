@@ -49,10 +49,21 @@ def mesh_counts(ply: bytes) -> tuple[int, int] | None:
         return None
 
 
-def vis_extension(response: dict[str, Any]) -> str:
+def vis_extension(response: dict[str, Any], data: bytes | None = None) -> str:
+    """Image extension: sniffed from the bytes first (fal serves visualizations as
+    application/octet-stream), then the declared content type, then the URL."""
+    if data:
+        if data[:3] == b"\xff\xd8\xff":
+            return ".jpg"
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return ".png"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return ".webp"
     vis = response.get("visualization") or {}
-    ext = mimetypes.guess_extension(vis.get("content_type") or "") or Path(vis.get("url", "")).suffix
-    return ext or ".png"
+    ext = mimetypes.guess_extension(vis.get("content_type") or "")
+    if ext in (None, ".bin"):
+        ext = Path(vis.get("url", "")).suffix
+    return ext if ext and ext != ".bin" else ".png"
 
 
 def write_frame(
@@ -95,7 +106,7 @@ def write_frame(
         else:
             record["vertex_count"], record["face_count"] = counts
     if visualization is not None:
-        record["vis_file"] = f"{stem}_vis{vis_extension(response)}"
+        record["vis_file"] = f"{stem}_vis{vis_extension(response, visualization)}"
         (out / record["vis_file"]).write_bytes(visualization)
     (out / f"{stem}.json").write_text(json.dumps(record, indent=1))
     return record

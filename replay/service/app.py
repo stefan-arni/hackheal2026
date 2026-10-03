@@ -125,7 +125,7 @@ async def run_frame(trial: Trial, stem: str, jpeg: bytes, mask: bytes | None, t_
     try:
         with Image.open(io.BytesIO(jpeg)) as im:
             size = list(im.size)
-        res = await sam().reconstruct(jpeg, mask, run=trial.id)
+        res = await sam().reconstruct(jpeg, mask, run=trial.id, priority=0 if extra["kind"] == "burst" else 1)
         write_frame(
             trial.frames_dir, stem, t_ms=t_ms, image_size=size, response=res.response,
             latency_s=res.latency_s, ply=res.ply, visualization=res.visualization, extra=extra,

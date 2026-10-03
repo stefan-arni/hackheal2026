@@ -34,11 +34,13 @@ from service.fal_client_wrap import CacheMiss, SamBodyClient  # noqa: E402
 from service.runs import write_frame, write_summary  # noqa: E402
 
 
-def save(out: Path, frame: Path, t_ms: float, size: list[int], res) -> dict:
+def save(out: Path, frame: Path, t_ms: float, size: list[int], res, stamp: dict | None = None) -> dict:
     return write_frame(
         out, frame.stem, t_ms=t_ms, image_size=size, response=res.response, latency_s=res.latency_s,
         ply=res.ply, visualization=res.visualization,
-        extra={"image_sha1": res.key, "from_cache": res.from_cache, "request_id": res.request_id},
+        extra={"image_sha1": res.key, "from_cache": res.from_cache, "request_id": res.request_id,
+               **({k: stamp[k] for k in ("src_index", "t_clip_ms", "crop", "frame_size", "source") if k in stamp}
+                  if stamp else {})},
     )
 
 
@@ -55,6 +57,9 @@ async def main(args: argparse.Namespace) -> int:
     todo = [(i, f) for i, f in indexed if args.force or not (args.out / f"{f.stem}.json").exists()]
 
     cache, budget = FalCache(), Budget(override=args.override_budget)
+    # timestamps.json (from extract_frames_by_index.py) beats the uniform-fps assumption
+    stamps_path = args.frames / "timestamps.json"
+    stamps = json.loads(stamps_path.read_text()) if stamps_path.exists() else {}
     items = []  # (t_ms, frame, jpeg, mask, key, size)
     for i, f in todo:
         jpeg = f.read_bytes()
@@ -62,7 +67,8 @@ async def main(args: argparse.Namespace) -> int:
         mask = mpath.read_bytes() if mpath and mpath.exists() else None
         with Image.open(io.BytesIO(jpeg)) as im:
             size = list(im.size)
-        items.append((i * 1000.0 / args.fps, f, jpeg, mask, image_key(jpeg, mask), size))
+        t_ms = stamps[f.name]["t_ms"] if f.name in stamps else i * 1000.0 / args.fps
+        items.append((t_ms, f, jpeg, mask, image_key(jpeg, mask), size))
 
     hits = [it for it in items if cache.has(it[4])]
     misses = [it for it in items if not cache.has(it[4])]
@@ -76,7 +82,7 @@ async def main(args: argparse.Namespace) -> int:
     async with SamBodyClient(live=args.live, run=run, cache=cache, budget=budget,
                              concurrency=args.concurrency) as sam:
         for t_ms, f, jpeg, mask, key, size in hits:
-            save(args.out, f, t_ms, size, await sam.reconstruct(jpeg, mask))
+            save(args.out, f, t_ms, size, await sam.reconstruct(jpeg, mask), stamps.get(f.name))
 
         if misses and not args.live:
             if recover_keys:
@@ -108,7 +114,7 @@ async def main(args: argparse.Namespace) -> int:
                 print(f"  {f.name}: ERROR {e!r}")
                 return
             try:  # the result is already cached (paid for); a write problem must not lose the batch
-                rec = save(args.out, f, t_ms, size, res)
+                rec = save(args.out, f, t_ms, size, res, stamps.get(f.name))
             except Exception as e:
                 errors.append({"frame": f.name, "error": f"saving: {e!r}"})
                 print(f"  {f.name}: cached, but saving failed: {e!r}")

@@ -65,8 +65,9 @@ def load_run(run_dir: Path) -> tuple[list[Frame], list[str]]:
 
 def find_keypoints(names: list[str], *patterns: str) -> list[int]:
     """Indices of keypoints whose name contains any of the patterns (case-insensitive)."""
-    pats = [s.lower() for s in patterns]
-    return [i for i, n in enumerate(names) if any(s in n.lower() for s in pats)]
+    norm = lambda x: x.lower().replace("-", "_")  # fal's MHR names are hyphenated
+    pats = [norm(s) for s in patterns]
+    return [i for i, n in enumerate(names) if any(s in norm(n) for s in pats)]
 
 
 def load_conventions(run_dir: Path) -> dict | None:

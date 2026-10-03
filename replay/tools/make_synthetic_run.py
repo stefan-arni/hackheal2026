@@ -343,6 +343,10 @@ def generate(
         {"t": (LIFT_START_S + LIFT_DUR_S) * 1000, "kind": "foot_down", "side": "right"},
     ]
     write_summary(out, {"SYNTHETIC": True, "events": events})  # true events, for viewer ticks
+    # self-describing axis conventions, so the pipeline never applies real fal's to synthetic data
+    conv = {"add_cam_t": body_relative, "flip": "identity"}
+    (out / "conventions.json").write_text(json.dumps(
+        {"SYNTHETIC": True, "mesh": conv, "keypoints_3d": conv, "camera_y_down": True}, indent=1))
 
     # Ground truth. Floor frame == world frame here: the camera has no roll/yaw, so the
     # minimal rotation taking the camera-frame floor normal to +y is exactly camera->world.

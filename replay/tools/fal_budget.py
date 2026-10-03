@@ -84,7 +84,7 @@ def migrate(cache: FalCache, frames_dir: Path) -> None:
                             ply=ply.read_bytes() if ply.exists() else None,
                             visualization=vis.read_bytes() if vis and vis.exists() else None,
                             request_id=rec.get("request_id"))
-            cache.put(key, res, params=PARAMS, vis_ext=vis.suffix if vis else vis_extension(response))
+            cache.put(key, res, params=PARAMS, vis_ext=vis_extension(response, res.visualization))
             moved += 1
     print(f"migrated {moved}, already cached {already}, skipped synthetic/mock {skipped}, unresolved {unresolved}")
 

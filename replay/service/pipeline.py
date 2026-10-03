@@ -46,6 +46,19 @@ class Run:
     kp_names: list[str]
     stems: list[str]
     vis_files: list[str | None]
+    image_size: np.ndarray | None = None  # (F,2) [W, H] of the image sent to fal (the crop)
+    crop: np.ndarray | None = None  # (F,4) crop box in full-frame pixels, None if unknown
+    t_clip_ms: np.ndarray | None = None  # (F,) source-clip time, for matching MediaPipe timelines
+
+
+def subset(run: Run, keep: np.ndarray) -> Run:
+    """The same run restricted to frames where keep is True."""
+    idx = np.flatnonzero(keep)
+    pick = lambda a: None if a is None else a[idx]  # noqa: E731
+    return Run(t_s=run.t_s[idx], focal=run.focal[idx], cam_t=run.cam_t[idx], kp3d=run.kp3d[idx],
+               verts=run.verts[idx], faces=run.faces, kp_names=run.kp_names,
+               stems=[run.stems[i] for i in idx], vis_files=[run.vis_files[i] for i in idx],
+               image_size=pick(run.image_size), crop=pick(run.crop), t_clip_ms=pick(run.t_clip_ms))
 
 
 def load_run(run_dir: Path, conventions: dict | None = None) -> Run:
@@ -61,6 +74,7 @@ def load_run(run_dir: Path, conventions: dict | None = None) -> Run:
         raise ValueError(f"no usable frames in {run_dir}")
 
     t, focal, cam_t, kp3d, verts, stems, vis = [], [], [], [], [], [], []
+    sizes, crops, t_clip = [], [], []
     faces = None
     for r in recs:
         person = r["metadata"]["people"][0]
@@ -78,10 +92,17 @@ def load_run(run_dir: Path, conventions: dict | None = None) -> Run:
         verts.append(to_camera(np.asarray(mesh.vertices, float), ct, mc["flip"], mc["add_cam_t"]))
         stems.append(stem)
         vis.append(r.get("vis_file"))
+        sizes.append(r.get("image_size"))
+        crops.append(r.get("crop"))
+        t_clip.append(r.get("t_clip_ms"))
     return Run(
         t_s=np.array(t), focal=np.array(focal), cam_t=np.stack(cam_t), kp3d=np.stack(kp3d),
-        verts=np.stack(verts), faces=faces, kp_names=recs[0]["metadata"].get("keypoint_names") or [],
+        verts=np.stack(verts), faces=faces,
+        kp_names=[norm_name(n) for n in recs[0]["metadata"].get("keypoint_names") or []],
         stems=stems, vis_files=vis,
+        image_size=np.array(sizes, float) if all(x is not None for x in sizes) else None,
+        crop=np.array(crops, float) if all(x is not None for x in crops) else None,
+        t_clip_ms=np.array(t_clip, float) if all(x is not None for x in t_clip) else None,
     )
 
 
@@ -92,8 +113,45 @@ def _find_conventions(run_dir: Path) -> dict | None:
     return None
 
 
+def norm_name(name: str) -> str:
+    """fal's MHR names are hyphenated ("left-big-toe-tip"); compare as "left_big_toe_tip"."""
+    return name.lower().replace("-", "_").replace(" ", "_")
+
+
 def _kp(names: list[str], *patterns: str) -> list[int]:
-    return [i for i, n in enumerate(names) if any(s in n.lower() for s in patterns)]
+    pats = [norm_name(p) for p in patterns]
+    return [i for i, n in enumerate(names) if any(p in norm_name(n) for p in pats)]
+
+
+# SAM (MHR, normalized names) -> MediaPipe Pose landmark names, for reprojection checks
+MP_PAIRS = [("nose", "nose")] + [
+    (f"{s}_{j}", f"{s}_{j}") for s in ("left", "right")
+    for j in ("eye", "ear", "shoulder", "elbow", "wrist", "hip", "knee", "ankle", "heel")
+] + [("left_big_toe_tip", "left_foot_index"), ("right_big_toe_tip", "right_foot_index")]
+OUTLIER_MIN_PX = 20.0  # never call a frame an outlier below this median joint error
+OUTLIER_FACTOR = 3.0  # ... or below this × the trial's median error
+
+
+def reprojection_vs_mediapipe(run: Run, landmarks: dict, min_vis: float = 0.5) -> np.ndarray:
+    """Per-frame median pixel error (F,) between SAM's keypoints (projected, full-frame px) and
+    MediaPipe's 2D landmarks at the nearest timestamp. NaN where no comparison is possible."""
+    if run.crop is None or run.image_size is None or run.t_clip_ms is None:
+        raise ValueError("run lacks crop / image_size / t_clip_ms (frames not from extract_frames_by_index)")
+    mp_names = list(landmarks["names"])
+    mp_xyv = np.asarray(landmarks["xyv"], float)  # (M, 33, 3) full-frame px + visibility
+    pairs = [(run.kp_names.index(a), mp_names.index(b)) for a, b in MP_PAIRS
+             if a in run.kp_names and b in mp_names]
+    sam_i, mp_i = np.array([p[0] for p in pairs]), np.array([p[1] for p in pairs])
+    near = g.nearest_timestamp_index(run.t_clip_ms, np.asarray(landmarks["t_ms"], float))
+    err = np.full(len(run.t_s), np.nan)
+    for f in range(len(run.t_s)):
+        W, H = run.image_size[f]
+        uv = g.project_pinhole(run.kp3d[f, sam_i], run.focal[f], W, H) + run.crop[f, :2]
+        ref = mp_xyv[near[f], mp_i]
+        ok = ref[:, 2] >= min_vis
+        if ok.sum() >= 5:
+            err[f] = float(np.nanmedian(np.linalg.norm(uv[ok] - ref[ok, :2], axis=1)))
+    return err
 
 
 def stance_mask(t_s: np.ndarray, events: list[dict], margin_s: float = EVENT_MARGIN_S) -> np.ndarray:
@@ -103,19 +161,46 @@ def stance_mask(t_s: np.ndarray, events: list[dict], margin_s: float = EVENT_MAR
     return np.abs(t_s[:, None] - ev[None]).min(axis=1) > margin_s
 
 
-def process(run: Run, events: list[dict], patient_height_m: float) -> dict[str, Any]:
-    """Spec math pipeline, steps 2–11. Returns arrays for the bundle plus diagnostics."""
+def process(
+    run: Run,
+    events: list[dict],
+    patient_height_m: float | None,
+    *,
+    landmarks: dict | None = None,
+    stance_intervals_s: list[tuple[float, float]] | None = None,
+) -> dict[str, Any]:
+    """Spec math pipeline, steps 2–11. Returns arrays for the bundle plus diagnostics.
+
+    landmarks: MediaPipe 2D timeline (scout's landmarks_2d.json) -> step 3 outlier rejection.
+    stance_intervals_s: [t0, t1] (same clock as run.t_s) where both feet are planted; default is
+    every frame more than EVENT_MARGIN_S from an event. patient_height_m None keeps SAM's scale.
+    """
+    quality: dict[str, Any] = {}
+    # 3. outlier rejection: SAM keypoints vs MediaPipe 2D at the nearest timestamp
+    if landmarks is not None:
+        err = reprojection_vs_mediapipe(run, landmarks)
+        thr = max(OUTLIER_MIN_PX, OUTLIER_FACTOR * float(np.nanmedian(err)))
+        keep = g.inlier_mask(err, thr)
+        quality["reprojection"] = {
+            "median_px": round(float(np.nanmedian(err)), 1), "p95_px": round(float(np.nanpercentile(err, 95)), 1),
+            "threshold_px": round(thr, 1), "dropped": [s for s, k in zip(run.stems, keep) if not k],
+            "per_frame_px": {s: (None if np.isnan(e) else round(float(e), 1)) for s, e in zip(run.stems, err)},
+        }
+        run = subset(run, keep)
     names, t = run.kp_names, run.t_s
-    stance = stance_mask(t, events)
+    if stance_intervals_s is not None:
+        stance = np.zeros(len(t), bool)
+        for t0, t1 in stance_intervals_s:
+            stance |= (t >= t0) & (t <= t1)
+    else:
+        stance = stance_mask(t, events)
     if stance.sum() < 3:
-        raise ValueError("fewer than 3 stance frames")
+        raise ValueError(f"fewer than 3 stance frames ({int(stance.sum())})")
 
     # 2. focal normalization: shift each frame along camera z to the normalized depth
     shift = g.normalize_focal(run.cam_t, run.focal) - run.cam_t
     V = (run.verts + shift[:, None, :]) @ Y_UP
     K = (run.kp3d + shift[:, None, :]) @ Y_UP
-
-    # 3. outlier rejection needs MediaPipe landmarks (not wired yet) -> keep all frames
 
     # 4. floor fit. Pass 1: heel/toe keypoints from stance frames (spec). In tandem stance
     # these lie nearly on one line, so roll is poorly constrained; pass 2 refits on the
@@ -150,7 +235,9 @@ def process(run: Run, events: list[dict], patient_height_m: float) -> dict[str, 
     Va = g.align_to_floor(V, R, origin)
 
     # 5. metric scale
-    s = g.metric_scale(patient_height_m, Va[stance][..., 1].max(axis=1))
+    heights = Va[stance][..., 1].max(axis=1)
+    s = g.metric_scale(patient_height_m, heights) if patient_height_m else 1.0
+    quality["mesh_height_m"] = round(float(np.median(heights)), 3)
     Va = Va * s
 
     # 6. temporal smoothing (non-uniform timestamps)
@@ -183,7 +270,10 @@ def process(run: Run, events: list[dict], patient_height_m: float) -> dict[str, 
         "origin_cam": Y_UP @ origin,
         "R_cam_to_floor": R @ Y_UP,
         "scale": s,
+        "stems": run.stems,
+        "vis_files": run.vis_files,
         "quality": {
+            **quality,
             "aligned": True,
             "frames": len(t),
             "stance_frames": int(stance.sum()),

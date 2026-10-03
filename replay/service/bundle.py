@@ -2,7 +2,8 @@
 
     <dir>/meta.json   trialId, t [F] (ms), counts, events, com, bos, margin, heatmap, noise_floor, quality, frames
     <dir>/faces.bin   Uint32 [faces_count * 3]
-    <dir>/verts.bin   Float32 [F * V * 3], little-endian, frame-major
+    <dir>/verts.bin   Float32 [F * V * 3], little-endian, frame-major; Float16 when the float32
+                      file would exceed FLOAT16_ABOVE_BYTES (meta.verts_dtype says which)
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+FLOAT16_ABOVE_BYTES = 8 * 1024 * 1024  # float16 ≈ 1 mm precision at 1–2 m, far below SAM's noise
 
 
 def _list(x):
@@ -43,11 +46,15 @@ def write_bundle(
     verts = np.ascontiguousarray(result["verts"], dtype="<f4")
     faces = np.ascontiguousarray(result["faces"], dtype="<u4")
     F, V, _ = verts.shape
+    dtype = "float32"
+    if verts.nbytes > FLOAT16_ABOVE_BYTES:
+        verts, dtype = verts.astype("<f2"), "float16"
     meta = {
         "trialId": trial_id,
         "t": (np.asarray(result["t_s"]) * 1000).round(1).tolist(),
         "frames_count": F,
         "vertex_count": V,
+        "verts_dtype": dtype,
         "faces_count": len(faces),
         "events": events or [],
         "com": _list(result.get("com")),
@@ -67,10 +74,11 @@ def write_bundle(
 
 
 def read_bundle(path: Path) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
-    """-> (meta, faces (Fc,3) uint32, verts (F,V,3) float32)."""
+    """-> (meta, faces (Fc,3) uint32, verts (F,V,3) float32 — float16 files are widened)."""
     meta = json.loads((path / "meta.json").read_text())
     faces = np.frombuffer((path / "faces.bin").read_bytes(), dtype="<u4").reshape(-1, 3)
-    verts = np.frombuffer((path / "verts.bin").read_bytes(), dtype="<f4").reshape(
+    dt = "<f2" if meta.get("verts_dtype") == "float16" else "<f4"
+    verts = np.frombuffer((path / "verts.bin").read_bytes(), dtype=dt).astype(np.float32).reshape(
         meta["frames_count"], meta["vertex_count"], 3
     )
     assert len(faces) == meta["faces_count"]

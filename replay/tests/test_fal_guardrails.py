@@ -289,3 +289,48 @@ def test_cache_write_is_complete(env):
     entry = json.loads((d / "response.json").read_text())
     assert (d / "mesh.ply").read_bytes() == b"ply-bytes" and (d / "vis.png").read_bytes() == b"png-bytes"
     assert entry["request_id"] == "req-1" and entry["params"]["include_3d_keypoints"] is False
+
+
+# --- priority (live trials: error bursts before uniform frames) ------------------------------
+
+from service.fal_client_wrap import PrioritySemaphore  # noqa: E402
+
+
+def test_priority_semaphore_order_and_limit():
+    async def go():
+        sem, order, active, peak = PrioritySemaphore(2), [], [0], [0]
+
+        async def job(name, prio, hold=0.01):
+            async with sem(prio):
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+                order.append(name)
+                await asyncio.sleep(hold)
+                active[0] -= 1
+
+        tasks = [asyncio.create_task(job(f"u{i}", 1)) for i in range(6)]  # uniform frames queue up
+        await asyncio.sleep(0.001)
+        tasks += [asyncio.create_task(job(f"b{i}", 0)) for i in range(3)]  # then a burst arrives
+        await asyncio.gather(*tasks)
+        return order, peak[0]
+
+    order, peak = asyncio.run(go())
+    assert peak == 2
+    assert order[:2] == ["u0", "u1"]  # already running when the burst arrived
+    assert order[2:5] == ["b0", "b1", "b2"]  # burst jumps the queued uniform frames
+    assert order[5:] == ["u2", "u3", "u4", "u5"]  # FIFO within a priority
+
+
+def test_priority_semaphore_cancelled_waiter_does_not_leak():
+    async def go():
+        sem = PrioritySemaphore(1)
+        await sem.acquire()
+        waiter = asyncio.create_task(sem.acquire(0))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        sem.release()
+        await asyncio.wait_for(sem.acquire(1), 0.1)  # slot is free again
+        return sem._value
+
+    assert asyncio.run(go()) == 0
