@@ -159,8 +159,13 @@ def reprojection_vs_mediapipe(run: Run, landmarks: dict, min_vis: float = 0.5) -
     return err
 
 
+# posecam BESS errors that say nothing about foot contact: they must not remove floor-fit frames
+# (a trial full of "hands off hips" would otherwise leave no stance frames at all)
+NON_FOOT_EVENTS = {"hands_off_hips", "eyes_open", "hip_angle", "out_of_position"}
+
+
 def stance_mask(t_s: np.ndarray, events: list[dict], margin_s: float = EVENT_MARGIN_S) -> np.ndarray:
-    ev = np.array([e["t"] / 1000 for e in events])
+    ev = np.array([e["t"] / 1000 for e in events if e.get("kind") not in NON_FOOT_EVENTS])
     if ev.size == 0:
         return np.ones(len(t_s), bool)
     return np.abs(t_s[:, None] - ev[None]).min(axis=1) > margin_s

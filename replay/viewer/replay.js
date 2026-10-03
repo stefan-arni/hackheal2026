@@ -239,6 +239,12 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
   const rel = ms => (ms - t0) / 1000; // absolute ms -> seconds into the trial
 
   if (data.synthetic) top.append(el('span', 'rp-badge syn', 'SYNTHETIC'));
+  if (Q.MOCK_FAL) top.append(el('span', 'rp-badge syn', 'fal MOCK'));
+  const COV = meta?.coverage, partial = !!COV && COV.received > 0 && COV.done < COV.received;
+  if (COV) {
+    const b = el('span', `rp-badge ${partial ? 'est' : 'ok'}`, `${COV.done}/${COV.received} frames · ${COV.stage}${partial ? ' · gaps interpolated' : ''}`);
+    b.title = 'frames reconstructed by SAM 3D Body / frames sent for this trial'; top.append(b);
+  }
   if (A.quality) top.append(el('span', `rp-badge q-${A.quality}`, `quality: ${A.quality}`));
   top.append(data.aligned ? el('span', 'rp-badge ok', 'floor-aligned') : el('span', 'rp-badge raw', 'camera frame · unaligned'));
   if (Q.ap_real === false) top.append(el('span', 'rp-badge est', 'forward/back estimated'));
@@ -441,7 +447,7 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
   const viewButtons = new Map(Object.keys(VIEWS).map((n, i) => {
     const b = el('button', n === 'front' ? 'on' : '', n[0].toUpperCase() + n.slice(1)); b.title = `${n} view (${i + 1})`; b.onclick = () => setView(n); return [n, b];
   }));
-  let speed = 0.5, smooth = false;
+  let speed = 0.5, smooth = partial; // a deadline replay with missing frames: interpolate by default
   const speedButtons = SPEEDS.map(s => { const b = el('button', s === speed ? 'on' : '', `${s}×`); b.onclick = () => setSpeed(s); return b; });
   function setSpeed(s) { speed = s; speedButtons.forEach((b, k) => b.classList.toggle('on', SPEEDS[k] === s)); }
   const toggle = (label, on, fn, tip) => { const b = el('button', on ? 'on' : '', label); b.title = tip || label; b.onclick = () => { on = !on; b.classList.toggle('on', on); fn(on); }; return b; };
@@ -449,7 +455,7 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
   replayBtn.onclick = () => instantReplay(defaultEvent());
   const ctl = el('div', 'rp-ctl');
   ctl.append(replayBtn, ...viewButtons.values(), ...speedButtons,
-    toggle('Smooth', false, v => (smooth = v), 'interpolate between frames (automatic during instant replay)'),
+    toggle('Smooth', smooth, v => (smooth = v), 'interpolate between frames (automatic during instant replay)'),
     toggle('Matte', false, v => { mesh.material = v ? matteMat : glassMat; }, 'solid matte body'),
     toggle('Wire', false, v => { glassMat.wireframe = v; matteMat.wireframe = v; }, 'wireframe (screenshots)'),
     toggle('Heat', false, v => { glassMat.uniforms.uHeat.value = v ? 1 : 0; }, 'per-vertex sway heatmap'),
@@ -556,7 +562,7 @@ export async function mountReplay(element, src, { onSeek, jumpTo, title = 'Insta
     const srcs = (d.sources || []).map(x => `${x.source} ${rel(x.t_ms).toFixed(2)} s`).join(' · ');
     call.innerHTML = `${head}<small>${td.tt.toFixed(2)} s into the trial${res ? ' · ' + res : ''}${d.uncertain ? ' · uncertain' : ''}`
       + `${srcs ? `<br>sources: ${srcs}` : ''}</small>`;
-    const b = el('button', '', 'Continue ▶'); b.onclick = () => { setSpeed(0.5); smooth = false; setPlaying(true); setView('front'); };
+    const b = el('button', '', 'Continue ▶'); b.onclick = () => { setSpeed(0.5); smooth = partial; setPlaying(true); setView('front'); };
     call.append(b); call.style.borderColor = m < 0 ? '#ef4444' : '#f59e0b'; call.style.display = 'block';
   }
 

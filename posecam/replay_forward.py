@@ -2,10 +2,13 @@
 
     python server.py --replay-url http://<laptop>:8017            # off unless given
 
-During a BESS test (bess_started -> bess_done/failed/cancelled) this sends:
+During a BESS test (bess_running -> bess_done/failed/cancelled) this sends:
   - full frames (never cropped: SAM 3D Body assumes the image centre is the optical axis)
-    at 1.5 fps, plus a 10 fps burst covering 0.5 s before and after every error /
-    touchdown (the 0.5 s before comes from a 1 s ring buffer)
+    at 1.5 fps from 1 s before scoring starts (the baseline; the rest of the countdown is
+    skipped), plus a 10 fps burst covering 0.5 s before and after every error /
+    touchdown (the 0.5 s before comes from a 1 s ring buffer), at most MAX_BURST_FRAMES
+    burst frames per trial: fal does ~0.7 frames/s, so a 3-trial session must stay near
+    ~25 frames per trial to be reconstructed within each trial's deadline
     -> POST {url}/replay/{trialId}/frame   multipart: jpeg, t, crop, frame_size, kind
   - on bess_done (or failed/cancelled): POST {url}/replay/{trialId}/end with the trial's
     events as {t, kind, side} (t = the frame's client timestamp, ms) and patient height.
@@ -38,6 +41,7 @@ UNIFORM_FPS = 1.5
 BURST_FPS = 10.0
 BURST_HALF_S = 0.5
 RING_S = 1.0
+MAX_BURST_FRAMES = 10  # ~one full burst per trial; later errors still go to /end, without frames
 END_KINDS = ("bess_done", "bess_failed", "bess_cancelled")
 
 
@@ -64,7 +68,7 @@ class ReplayForwarder:
 
     def __init__(self, url: str, *, patient_height_cm: float | None = None, session_id: str | None = None,
                  sender: Callable[[str, bytes, str], None] = http_send, max_queue: int = 64,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, max_burst_frames: int = MAX_BURST_FRAMES):
         self.url = url.rstrip("/")
         self.height = patient_height_cm
         self.session = session_id  # groups the trials of one demo/clinic session on the replay side
@@ -76,6 +80,10 @@ class ReplayForwarder:
         self.trial_clock: str | None = None  # "phone" or "server", fixed for the whole trial
         self.offset: float | None = None  # latest phone_ms - server_ms (to map stray frames)
         self.events: list[dict] = []
+        self.running = False  # scoring started (bess_running); countdown frames are not sent
+        self.max_burst_frames = max_burst_frames
+        self.burst_frames = 0
+        self.skipped_bursts = 0
         self.last_uniform = -1e18
         self.last_burst = -1e18
         self.burst_until = -1e18
@@ -104,13 +112,14 @@ class ReplayForwarder:
         self.ring.append((None if t_ms is None else float(t_ms), server, jpeg, size))
         while self.ring and server - self.ring[0][1] > RING_S * 1000:
             self.ring.popleft()
-        if self.trial is None:
+        if self.trial is None or not self.running:
             return
         t = self._t(t_ms, server)
         if t is None:
             self.dropped += 1  # phone-clock trial, frame without a timestamp, no offset yet
             return
-        if t <= self.burst_until and t - self.last_burst >= 1000 / BURST_FPS:
+        if (t <= self.burst_until and t - self.last_burst >= 1000 / BURST_FPS
+                and self.burst_frames < self.max_burst_frames):
             self._send_frame(t, jpeg, size, "burst")
             self.last_burst = t
         elif t - self.last_uniform >= 1000 / UNIFORM_FPS:
@@ -127,6 +136,7 @@ class ReplayForwarder:
                 start = float(t_ms) if t_ms is not None else server
                 self.trial = f"bess-{m.get('stance', 'test')}-{int(start)}"
                 self.events, self.sent_ms = [], set()
+                self.running, self.burst_frames, self.skipped_bursts = False, 0, 0
                 self.last_uniform = self.last_burst = self.burst_until = -1e18
                 log.info("replay trial %s started (%s clock)", self.trial, self.trial_clock)
                 continue
@@ -134,6 +144,10 @@ class ReplayForwarder:
                 continue
             t = self._t(t_ms, server)
             if t is None:
+                continue
+            if kind == "bess_running":
+                self.running = True
+                self._baseline(t)
                 continue
             if kind in ("bess_error", "foot_touchdown"):
                 self.events.append({"t": t, "kind": "foot_down" if kind == "foot_touchdown" else m.get("error", kind),
@@ -145,18 +159,32 @@ class ReplayForwarder:
                 body = json.dumps({"events": self.events, "patient_height_cm": self.height, "clock": self.trial_clock,
                                    "session_id": self.session, "bess": {"result": kind, **bess}}).encode()
                 self._put((f"{self.url}/replay/{self.trial}/end", body, "application/json"))
-                log.info("replay trial %s ended (%s): %d events, %d frames sent, %d dropped",
-                         self.trial, kind, len(self.events), self.sent, self.dropped)
+                log.info("replay trial %s ended (%s): %d events, %d frames sent, %d dropped, %d bursts over the cap",
+                         self.trial, kind, len(self.events), self.sent, self.dropped, self.skipped_bursts)
                 self.trial = self.trial_clock = None
+                self.running = False
 
     # ---- internals
 
+    def _baseline(self, t: float) -> None:
+        """Scoring just started: send the last second of the countdown (the start position) at 1.5 fps."""
+        for client, server, jpeg, size in list(self.ring):
+            ft = self._t(client, server)
+            if (ft is not None and t - RING_S * 1000 <= ft <= t
+                    and ft - self.last_uniform >= 1000 / UNIFORM_FPS):
+                self._send_frame(ft, jpeg, size, "uniform")
+                self.last_uniform = ft
+
     def _burst(self, t: float) -> None:
-        """10 fps from 0.5 s before the event (ring buffer) to 0.5 s after (live)."""
+        """10 fps from 0.5 s before the event (ring buffer) to 0.5 s after (live), within the cap."""
+        if self.burst_frames >= self.max_burst_frames:
+            self.skipped_bursts += 1
+            return
         last = -1e18
         for client, server, jpeg, size in list(self.ring):
             ft = self._t(client, server)
-            if ft is not None and t - BURST_HALF_S * 1000 <= ft <= t and ft - last >= 1000 / BURST_FPS:
+            if (ft is not None and t - BURST_HALF_S * 1000 <= ft <= t and ft - last >= 1000 / BURST_FPS
+                    and self.burst_frames < self.max_burst_frames):
                 self._send_frame(ft, jpeg, size, "burst")
                 last = ft
         self.last_burst = last
@@ -166,6 +194,8 @@ class ReplayForwarder:
         if t in self.sent_ms:  # a frame can be both uniform and burst; send it once
             return
         self.sent_ms.add(t)
+        if kind == "burst":
+            self.burst_frames += 1
         w, h = size
         fields = {"t": f"{t:.1f}", "crop": json.dumps([0, 0, w, h]), "frame_size": json.dumps([w, h]), "kind": kind}
         if self.session:

@@ -173,9 +173,16 @@ class SamBodyClient:
         finally:
             del self._inflight[key]
 
-    async def warmup(self, jpeg: bytes) -> float:
-        """Run one frame (cached if seen before). Returns fal latency, 0 on a cache hit."""
-        return (await self.reconstruct(jpeg)).latency_s
+    async def warmup(self, jpeg: bytes, force: bool = False) -> float:
+        """Run one frame (cached if seen before) and return fal latency (0 on a cache hit).
+        force=True skips the cache lookup so fal really runs (one billed call in live mode);
+        the result is stored under a one-off key so the frame's normal cache entry is untouched."""
+        if not force:
+            return (await self.reconstruct(jpeg)).latency_s
+        if not self.live and self.backend is None:
+            raise CacheMiss(image_key(jpeg))
+        key = f"{image_key(jpeg)}_warmup{int(time.time())}"
+        return (await self._reconstruct_uncached(key, jpeg, None, "warmup", priority=0)).latency_s
 
     # --- internals -------------------------------------------------------------
 

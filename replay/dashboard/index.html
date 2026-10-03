@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Balance session</title>
+<style>
+  :root { --bg:#070b14; --panel:#0f172a; --line:#1e293b; --ink:#f8fafc; --muted:#94a3b8; --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --blue:#38bdf8; --yellow:#facc15; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 700 17px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 10px; align-items: center; padding: 10px 16px; flex-wrap: wrap; border-bottom: 2px solid var(--line); }
+  header h1 { font-size: 21px; margin: 0 auto 0 0; }
+  .badge { padding: 6px 12px; border-radius: 8px; font-size: 14px; background: var(--line); }
+  .badge.ok { background: #14532d; color: #bbf7d0; } .badge.bad { background: #7f1d1d; color: #fee2e2; } .badge.mock { background: #facc15; color: #111; }
+  button, a.btn { font: inherit; font-size: 15px; color: var(--ink); background: var(--line); border: 3px solid #475569; border-radius: 10px; padding: 7px 12px; cursor: pointer; text-decoration: none; }
+  button:focus-visible, a.btn:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+  main { display: grid; grid-template-columns: minmax(380px, 40%) 1fr; gap: 14px; padding: 14px; height: calc(100% - 64px); }
+  .col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .panel { background: var(--panel); border: 2px solid var(--line); border-radius: 14px; padding: 12px; }
+  .live { display: grid; grid-template-columns: 200px 1fr; gap: 12px; }
+  #skel { width: 200px; height: 356px; background: #020617; border-radius: 10px; display: block; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+  .card { background: #020617; border: 2px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .card .k { color: var(--muted); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
+  .card .v { font-size: 34px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .card .s { color: var(--muted); font-size: 13px; }
+  #phase { grid-column: 1 / 3; }
+  .feed { overflow: auto; flex: 1; min-height: 120px; }
+  .feed h2, .replays h2 { font-size: 14px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; margin: 0 0 8px; }
+  .ev { display: flex; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 15px; }
+  .ev time { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 72px; }
+  .ev.err b { color: var(--red); } .ev.rep b { color: var(--blue); } .ev.start b { color: var(--green); }
+  .replays { overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+  .rcard { background: var(--panel); border: 2px solid var(--line); border-radius: 14px; padding: 12px; }
+  .rcard .head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .rcard .head b { font-size: 20px; margin-right: auto; }
+  .chip { padding: 4px 10px; border-radius: 999px; font-size: 13px; background: var(--line); }
+  .chip.error { background: #7c2d12; } .chip.full { background: #14532d; } .chip.deadline { background: #78350f; } .chip.update { background: #1e3a8a; }
+  .bar { height: 12px; background: #020617; border-radius: 6px; overflow: hidden; margin: 10px 0 4px; }
+  .bar i { display: block; height: 100%; background: var(--blue); width: 0; transition: width .4s; }
+  .rcard .info { color: var(--muted); font-size: 14px; }
+  .rcard iframe { width: 100%; height: 640px; border: 0; border-radius: 10px; margin-top: 10px; background: #000; }
+  .metrics { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; font-size: 15px; }
+  .metrics span b { font-size: 20px; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; z-index: 10; padding: 2vh 2vw; }
+  .overlay iframe { width: 100%; height: 92vh; border: 0; border-radius: 12px; }
+  .overlay button { margin-bottom: 8px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; height: auto; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Balance session</h1>
+  <span class="badge" id="conn">connecting…</span>
+  <span class="badge" id="mode" hidden></span>
+  <button id="prev" title="open the cached demo replay (backup)">◀ Previous trial (cached)</button>
+  <a class="btn" id="sessrep" target="_blank" rel="noopener">Session report ↗</a>
+</header>
+<main>
+  <section class="col">
+    <div class="panel live">
+      <canvas id="skel" width="400" height="712" aria-label="live skeleton"></canvas>
+      <div class="cards">
+        <div class="card" id="phase"><div class="k">Trial</div><div class="v" id="v-phase" style="font-size:24px">waiting for posecam</div><div class="s" id="s-phase"></div></div>
+        <div class="card"><div class="k">Stance</div><div class="v" id="v-stance" style="font-size:26px">–</div><div class="s" id="s-stance"></div></div>
+        <div class="card"><div class="k">Timer</div><div class="v" id="v-timer">–</div><div class="s" id="s-timer"></div></div>
+        <div class="card"><div class="k">BESS errors</div><div class="v" id="v-errors">–</div><div class="s" id="s-errors"></div></div>
+        <div class="card"><div class="k">Trunk angle</div><div class="v" id="v-trunk">–</div><div class="s" id="s-trunk">side lean, camera view</div></div>
+      </div>
+    </div>
+    <div class="panel feed"><h2>Events</h2><div id="feed"></div></div>
+  </section>
+  <section class="col replays" id="replays"><h2>3D replays (one per trial)</h2></section>
+</main>
+<div class="overlay" id="overlay"><button id="closeov">✕ Close</button><iframe id="ovframe" title="cached demo replay"></iframe></div>
+<script>
+const SID = location.pathname.split('/').filter(Boolean).pop();
+const $ = id => document.getElementById(id);
+$('title').textContent = `Balance session · ${SID}`;
+$('sessrep').href = `/session/${SID}/report`;
+const CACHED = '/viewer/?src=/cache/demo_IMG_9691/&jump=step';
+$('prev').onclick = () => { $('ovframe').src = CACHED; $('overlay').style.display = 'block'; };
+$('closeov').onclick = () => { $('overlay').style.display = 'none'; $('ovframe').src = 'about:blank'; };
+
+// MediaPipe Pose skeleton
+const EDGES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[27,31],[28,30],[30,32],[28,32],[0,11],[0,12]];
+const skel = $('skel'), g = skel.getContext('2d');
+let last = null;
+function drawSkeleton(s) {
+  g.fillStyle = '#020617'; g.fillRect(0, 0, skel.width, skel.height);
+  const L = s && s.landmarks; if (!L || !L.length) { g.fillStyle = '#475569'; g.font = '700 26px system-ui'; g.fillText('no person', 120, 360); return; }
+  const [iw, ih] = s.image_size || [9, 16], sc = Math.min(skel.width / iw, skel.height / ih), ox = (skel.width - iw * sc) / 2, oy = (skel.height - ih * sc) / 2;
+  const P = i => [ox + L[i][0] * iw * sc, oy + L[i][1] * ih * sc, L[i][2]];
+  const running = s.bess && s.bess.phase === 'running';
+  g.lineWidth = 9; g.lineCap = 'round'; g.strokeStyle = running ? '#38bdf8' : '#64748b';
+  for (const [a, b] of EDGES) { const p = P(a), q = P(b); if (p[2] < 0.4 || q[2] < 0.4) continue; g.beginPath(); g.moveTo(p[0], p[1]); g.lineTo(q[0], q[1]); g.stroke(); }
+  for (const i of [27, 28, 29, 30, 31, 32]) { const p = P(i); if (p[2] < 0.4) continue; g.fillStyle = '#facc15'; g.beginPath(); g.arc(p[0], p[1], 9, 0, 7); g.fill(); }
+  const h = P(0); if (h[2] > 0.4) { g.fillStyle = '#e2e8f0'; g.beginPath(); g.arc(h[0], h[1], 18, 0, 7); g.fill(); }
+}
+function showSummary(s) {
+  last = s; drawSkeleton(s);
+  const b = s.bess || {}, bal = s.balance || {}, sp = s.spine || {};
+  const phase = b.phase || 'idle';
+  $('v-phase').textContent = phase === 'running' ? `Recording · ${b.stance}` : phase === 'countdown' ? `Get ready · ${b.stance}` : 'Between trials';
+  $('s-phase').textContent = s.trial ? `trial ${s.trial}` : '';
+  $('v-stance').textContent = b.stance ? ({double: 'Feet together', tandem: 'Tandem', single: 'Single leg'}[b.stance] || b.stance) : (bal.state === 'balancing' ? `On ${bal.standing_foot} foot` : 'Standing');
+  $('s-stance').textContent = bal.lifted_foot ? `${bal.lifted_foot} foot up${bal.balance_time_s ? ` · ${bal.balance_time_s.toFixed(1)} s` : ''}` : '';
+  const tl = phase === 'running' ? b.time_left : phase === 'countdown' ? b.countdown_left : null;
+  $('v-timer').textContent = tl === null || tl === undefined ? '–' : `${tl.toFixed(1)} s`;
+  $('s-timer').textContent = phase === 'countdown' ? 'countdown' : phase === 'running' ? 'remaining' : '';
+  $('v-errors').textContent = b.errors ?? '–';
+  $('v-errors').style.color = b.errors ? 'var(--red)' : 'var(--ink)';
+  $('s-errors').textContent = b.total !== undefined && b.total !== null ? `session total ${b.total}` : '';
+  const ta = sp.trunk_angle_deg; $('v-trunk').textContent = ta === null || ta === undefined ? '–' : `${ta >= 0 ? '+' : ''}${ta.toFixed(0)}°`;
+}
+
+// event feed
+const LABEL = { bess_started: 'Trial started', bess_running: 'Recording', bess_done: 'Trial done', bess_error: 'BESS error', foot_touchdown: 'Foot touchdown',
+  balance_started: 'Foot lifted', bess_failed: 'Trial failed', bess_cancelled: 'Trial cancelled' };
+const HIDDEN = new Set(['duck', 'balance_update']); // not part of the balance protocol
+function addEvent(e) {
+  let cls = '', txt = '';
+  if (HIDDEN.has(e.kind)) return;
+  if (e.type === 'event' || e.type === undefined && e.kind) {
+    cls = e.kind === 'bess_error' || e.kind === 'foot_touchdown' ? 'err' : e.kind === 'bess_started' ? 'start' : '';
+    txt = `<b>${LABEL[e.kind] || e.kind}</b> ${e.label ? e.label : ''}${e.foot ? ` (${e.foot})` : ''}${e.stance && e.kind === 'bess_started' ? ` · ${e.stance}` : ''}${e.kind === 'bess_done' && e.errors !== undefined ? ` · ${e.errors} errors` : ''}`;
+  } else if (e.type === 'replay') { cls = 'rep'; txt = `<b>Replay ${e.stage}</b> ${e.trial} · ${e.after_end_s !== undefined ? e.after_end_s + ' s after trial end' : ''}${e.coverage ? ` · ${e.coverage.done}/${e.coverage.received} frames` : ''}`; }
+  else if (e.type === 'trial_end') { cls = 'start'; txt = `<b>Frames in</b> ${e.trial} · ${e.received} sent to the replay (${e.bursts} error-burst)`; }
+  else return;
+  const d = document.createElement('div'); d.className = `ev ${cls}`;
+  const t = new Date(e.t_wall ? e.t_wall * 1000 : (e.t > 1e12 ? e.t : Date.now())); d.innerHTML = `<time>${t.toLocaleTimeString()}</time><span>${txt}</span>`;
+  $('feed').prepend(d); while ($('feed').children.length > 80) $('feed').lastChild.remove();
+}
+
+// replay cards
+const cards = new Map();
+function card(trial) {
+  if (cards.has(trial)) return cards.get(trial);
+  const el = document.createElement('div'); el.className = 'rcard';
+  const stance = (trial.split('-')[1] || 'trial');
+  el.innerHTML = `<div class="head"><b>${({double: 'Feet together', tandem: 'Tandem', single: 'Single leg'}[stance] || stance)}</b>
+    <span class="chip" data-r="chip">recording</span><button data-r="upd" hidden></button><a class="btn" data-r="rep" target="_blank" rel="noopener" hidden>Report ↗</a>
+    <a class="btn" data-r="open" target="_blank" rel="noopener" hidden>Full screen ↗</a></div>
+    <div class="bar"><i data-r="bar"></i></div><div class="info" data-r="info">waiting for frames…</div><div class="metrics" data-r="metrics"></div>`;
+  $('replays').insertBefore(el, $('replays').children[1] || null);
+  const c = { el, trial, version: 0, frame: null, r: n => el.querySelector(`[data-r="${n}"]`) };
+  cards.set(trial, c); return c;
+}
+async function refresh(trial) {
+  const c = card(trial);
+  let st; try { st = await (await fetch(`/replay/${trial}/status`, { cache: 'no-store' })).json(); } catch { return; }
+  if (!st || st.detail) return;
+  if (st.fal_mode === 'mock') { $('mode').hidden = false; $('mode').className = 'badge mock'; $('mode').textContent = 'fal MOCK'; }
+  else if (st.fal_mode === 'live') { $('mode').hidden = false; $('mode').className = 'badge ok'; $('mode').textContent = 'fal live'; }
+  const pct = st.received ? Math.round(100 * st.done / st.received) : 0;
+  c.r('bar').style.width = `${pct}%`;
+  const chip = c.r('chip');
+  chip.className = `chip ${st.stage}`;
+  chip.textContent = { receiving: 'recording', processing: 'processing', error: 'error replay', full: 'full replay', deadline: 'deadline replay', update: 'updated' }[st.stage] || st.stage;
+  let info = st.state !== 'receiving' && st.done >= st.received && st.received ? `all ${st.done} frames reconstructed`
+    : `processing ${st.done}/${st.received} frames`;
+  if (st.eta_s && !st.timeline?.final_kind) info += ` · ETA ~${st.eta_s} s`;
+  if (st.deadline_in_s !== null && st.deadline_in_s !== undefined && st.deadline_in_s > 0) info += ` · deadline in ${Math.ceil(st.deadline_in_s)} s`;
+  const tl = st.timeline || {};
+  if (tl.error_ready_s !== undefined) info += ` · error replay +${tl.error_ready_s} s`;
+  if (tl.final_ready_s !== undefined) info += ` · ${tl.final_kind} replay +${tl.final_ready_s} s (${tl.final_frames})`;
+  if (st.stragglers) info += ` · ${st.stragglers} late frame(s) added`;
+  if (st.state === 'failed') info = `failed: ${st.error}`;
+  c.r('info').textContent = info;
+  if (st.report) { c.r('rep').hidden = false; c.r('rep').href = st.report; }
+  if (st.url && st.version !== c.version) {
+    if (c.loadedFinal && st.stage === 'update') { // late frames: offer them instead of resetting the doctor's view
+      c.pending = st;
+      const u = c.r('upd'); u.hidden = false; u.textContent = `⟳ Load update (${st.done}/${st.received} frames)`;
+      u.onclick = () => showReplay(c, c.pending);
+      return;
+    }
+    showReplay(c, st); // the newest publication takes the 3D view
+  }
+}
+async function showReplay(c, st) {
+  c.version = st.version;
+  c.loadedFinal = ['full', 'deadline', 'update'].includes(st.stage);
+  const src = `/viewer/?src=${encodeURIComponent(st.url)}&jump=step&v=${st.version}`;
+  c.r('open').hidden = false; c.r('open').href = src;
+  c.r('upd').hidden = true;
+  for (const o of cards.values()) if (o !== c && o.frame) { // one live 3D view at a time (GPU, and Zoom sharing)
+    o.frame.remove(); o.frame = null;
+    const u = o.r('upd'); u.hidden = false; u.textContent = '▶ Show 3D replay';
+    u.onclick = () => { o.version = -1; o.loadedFinal = false; refresh(o.trial); };
+  }
+  if (!c.frame) { c.frame = document.createElement('iframe'); c.frame.title = `3D replay ${c.trial}`; c.el.append(c.frame); }
+  c.frame.src = src;
+  try {
+    const a = await (await fetch(`${st.url}analytics.json`, { cache: 'no-store' })).json();
+    const m = a.margin || {}, s = a.ml_sway || {};
+    c.r('metrics').innerHTML = `<span>min margin <b style="color:${m.min_cm < 0 ? 'var(--red)' : 'var(--green)'}">${m.min_cm?.toFixed(1)} cm</b></span>`
+      + `<span>outside BOS <b>${m.time_outside_bos_s?.toFixed(1)} s</b></span><span>sway RMS <b>${s.rms_cm?.toFixed(1)} cm</b></span>`
+      + `<span>quality <b>${a.quality?.label}</b></span>` + (st.fal_mode === 'mock' ? '<span style="color:var(--yellow)">mock poses: numbers not meaningful</span>' : '');
+  } catch {}
+}
+
+// live stream
+function handle(item) {
+  if (item.type === 'snapshot') {
+    if (item.summary) showSummary(item.summary);
+    (item.trials || []).forEach(t => refresh(t));
+    (item.feed || []).forEach(addEvent);
+    return;
+  }
+  if (item.type === 'summary') return showSummary(item);
+  if (item.type === 'trial') return refresh(item.trial);
+  if (item.trial && ['progress', 'replay', 'trial_end'].includes(item.type)) refresh(item.trial);
+  addEvent(item);
+}
+function connect() {
+  const es = new EventSource(`/live/${SID}/stream`);
+  es.onopen = () => { $('conn').textContent = 'live'; $('conn').className = 'badge ok'; };
+  es.onerror = () => { $('conn').textContent = 'reconnecting…'; $('conn').className = 'badge bad'; };
+  es.onmessage = ev => { try { handle(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
+}
+connect();
+setInterval(() => { for (const t of cards.keys()) refresh(t); }, 2000); // progress / ETA tick even without events
+</script>
+</body>
+</html>

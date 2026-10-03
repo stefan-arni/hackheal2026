@@ -45,6 +45,7 @@ def write_bundle(
     events: list[dict] | None = None,
     frames: list[dict] | None = None,
     analytics: dict[str, Any] | None = None,
+    extra_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write a bundle from pipeline.process() (or pipeline.raw_display()) output."""
     out.mkdir(parents=True, exist_ok=True)
@@ -88,6 +89,8 @@ def write_bundle(
         (out / "verts_raw.bin").write_bytes((raw.astype("<f2") if dtype == "float16" else raw).tobytes())
         meta["verts_raw"] = "verts_raw.bin"
     (out / "faces.bin").write_bytes(faces.tobytes())
+    if extra_meta:
+        meta.update(_clean(extra_meta))
     (out / "meta.json").write_text(json.dumps(meta, allow_nan=False))
     return meta
 

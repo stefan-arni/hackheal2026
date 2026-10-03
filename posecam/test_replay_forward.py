@@ -50,7 +50,7 @@ def test_nothing_sent_outside_a_test():
 def test_uniform_rate_during_a_test():
     rec = Recorder()
     fw = ReplayForwarder("http://replay:8017/", sender=rec)
-    fw.on_messages([{"kind": "bess_started", "stance": "tandem"}], 1000)
+    fw.on_messages([{"kind": "bess_started", "stance": "tandem"}, {"kind": "bess_running"}], 1000)
     feed(fw, 1000, 5000)  # 4 s at 30 fps
     fw.flush()
     frames = rec.frames()
@@ -64,7 +64,7 @@ def test_uniform_rate_during_a_test():
 def test_burst_includes_the_half_second_before_the_error():
     rec = Recorder()
     fw = ReplayForwarder("http://replay:8017", sender=rec)
-    fw.on_messages([{"kind": "bess_started", "stance": "single"}], 0)
+    fw.on_messages([{"kind": "bess_started", "stance": "single"}, {"kind": "bess_running"}], 0)
     feed(fw, 0, 2000)
     fw.on_messages([{"kind": "bess_error", "error": "step_stumble_fall", "counted": True}], 2000)
     feed(fw, 2000 + 1000 / 30, 3000)
@@ -74,6 +74,37 @@ def test_burst_includes_the_half_second_before_the_error():
     assert all(b - a >= 99 for a, b in zip(burst_t, burst_t[1:]))  # <= 10 fps
     all_t = [float(rec.field(c, "t")) for c in rec.frames()]
     assert len(all_t) == len(set(all_t))  # each frame sent once
+
+
+def test_countdown_skipped_except_the_last_second():
+    rec = Recorder()
+    fw = ReplayForwarder("http://replay:8017", sender=rec)
+    fw.on_messages([{"kind": "bess_started", "stance": "double"}], 0)
+    feed(fw, 0, 5000)  # 5 s countdown: nothing sent yet
+    fw.flush()
+    assert rec.frames() == []
+    fw.on_messages([{"kind": "bess_running"}], 5000)
+    feed(fw, 5000, 7000)
+    fw.flush()
+    t = sorted(float(rec.field(c, "t")) for c in rec.frames())
+    assert 4000 <= t[0] < 5000  # the start position (baseline second) from the ring buffer
+    assert all(b - a >= 1000 / 1.5 - 1 for a, b in zip(t, t[1:]))
+
+
+def test_burst_frames_capped_per_trial():
+    rec = Recorder()
+    fw = ReplayForwarder("http://replay:8017", sender=rec, max_burst_frames=10)
+    fw.on_messages([{"kind": "bess_started", "stance": "single"}, {"kind": "bess_running"}], 0)
+    for k in range(1, 6):  # an error every 2 s
+        feed(fw, 2000 * k - 2000, 2000 * k)
+        fw.on_messages([{"kind": "bess_error", "error": "foot_lift"}], 2000 * k)
+    feed(fw, 10000, 11000)
+    fw.on_messages([{"kind": "bess_done", "errors": 5}], 11000)
+    fw.flush()
+    kinds = [rec.field(c, "kind") for c in rec.frames()]
+    assert kinds.count("burst") == 10 and fw.skipped_bursts >= 3
+    end = json.loads([c for c in rec.calls if c[0].endswith("/end")][0][1])
+    assert len(end["events"]) == 5  # every error is still reported
 
 
 def test_end_posts_events_on_bess_done():
@@ -226,7 +257,8 @@ def test_phone_clock_trial_maps_a_stray_frame_with_the_offset():
 def test_phone_clock_trial_drops_stray_frames_without_an_offset():
     rec = Recorder()
     fw = ReplayForwarder("http://replay:8017", sender=rec)
-    fw.on_messages([{"kind": "bess_started", "stance": "double"}], 1_791_000_000_000, recv_ms=1_000)
+    fw.on_messages([{"kind": "bess_started", "stance": "double"}, {"kind": "bess_running"}],
+                   1_791_000_000_000, recv_ms=1_000)
     fw.offer_frame(JPEG, None, (1080, 1920), recv_ms=1_100)  # no offset known yet
     fw.flush()
     assert rec.frames() == [] and fw.dropped == 1
