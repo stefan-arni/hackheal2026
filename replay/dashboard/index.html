@@ -78,7 +78,8 @@ const SID = location.pathname.split('/').filter(Boolean).pop();
 const $ = id => document.getElementById(id);
 $('title').textContent = `Balance session · ${SID}`;
 $('sessrep').href = `/session/${SID}/report`;
-const CACHED = '/viewer/?src=/cache/demo_IMG_9691/&jump=step';
+let CACHED = '/viewer/?src=/cache/demo_IMG_9691/&jump=step'; // a cached live trial wins (tools/cache_trial.py)
+fetch('/cache/demo_live/meta.json', { method: 'HEAD' }).then(r => { if (r.ok) CACHED = '/viewer/?src=/cache/demo_live/&jump=step'; }).catch(() => {});
 $('prev').onclick = () => { $('ovframe').src = CACHED; $('overlay').style.display = 'block'; };
 $('closeov').onclick = () => { $('overlay').style.display = 'none'; $('ovframe').src = 'about:blank'; };
 
