@@ -62,11 +62,12 @@ class ReplayForwarder:
     """One per client connection. offer_frame() for every received frame, on_messages() for
     every processed frame's event messages. Both return immediately."""
 
-    def __init__(self, url: str, *, patient_height_cm: float | None = None,
+    def __init__(self, url: str, *, patient_height_cm: float | None = None, session_id: str | None = None,
                  sender: Callable[[str, bytes, str], None] = http_send, max_queue: int = 64,
                  clock: Callable[[], float] = time.time):
         self.url = url.rstrip("/")
         self.height = patient_height_cm
+        self.session = session_id  # groups the trials of one demo/clinic session on the replay side
         self.sender = sender
         self.clock = clock
         self.q: queue.Queue = queue.Queue(maxsize=max_queue)
@@ -140,8 +141,9 @@ class ReplayForwarder:
                                     "source": "posecam"})
                 self._burst(t)
             elif kind in END_KINDS:
-                body = json.dumps({"events": self.events, "patient_height_cm": self.height,
-                                   "clock": self.trial_clock}).encode()
+                bess = {k: m.get(k) for k in ("stance", "errors", "by_type", "coverage", "reason") if k in m}
+                body = json.dumps({"events": self.events, "patient_height_cm": self.height, "clock": self.trial_clock,
+                                   "session_id": self.session, "bess": {"result": kind, **bess}}).encode()
                 self._put((f"{self.url}/replay/{self.trial}/end", body, "application/json"))
                 log.info("replay trial %s ended (%s): %d events, %d frames sent, %d dropped",
                          self.trial, kind, len(self.events), self.sent, self.dropped)
@@ -165,8 +167,10 @@ class ReplayForwarder:
             return
         self.sent_ms.add(t)
         w, h = size
-        body, ctype = _multipart({"t": f"{t:.1f}", "crop": json.dumps([0, 0, w, h]),
-                                  "frame_size": json.dumps([w, h]), "kind": kind}, jpeg)
+        fields = {"t": f"{t:.1f}", "crop": json.dumps([0, 0, w, h]), "frame_size": json.dumps([w, h]), "kind": kind}
+        if self.session:
+            fields["session"] = self.session
+        body, ctype = _multipart(fields, jpeg)
         self._put((f"{self.url}/replay/{self.trial}/frame", body, ctype))
 
     def _put(self, item) -> None:
