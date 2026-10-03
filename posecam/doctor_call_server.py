@@ -763,6 +763,25 @@ details.other[open] summary { margin-bottom: 10px; }
 .health .h small { color: #8f98a8; }
 /* skeleton over the patient video */
 .skeleton { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* ---------- speech analysis (clinician-controlled) ---------- */
+#speechButton { width: 100%; padding: 11px 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.speech-dot { width: 9px; height: 9px; border-radius: 50%; background: #fff; animation: speechPulse 1s infinite; }
+@keyframes speechPulse { 50% { opacity: .25; } }
+.speech-who { color: #9fa8b8; font-size: 12px; margin-bottom: 8px; }
+.speech-who b { color: #fff; }
+.speech-status { color: #8f98a8; font-size: 12px; margin-top: 8px; min-height: 15px; }
+.speech-status.err { color: #f0a640; }
+.speech-live { margin-top: 8px; }
+.speech-score { display: flex; align-items: baseline; gap: 10px; margin: 12px 0 2px; }
+.speech-score b { font-size: 30px; line-height: 1; }
+.speech-text { color: #c4cad6; font-size: 12px; margin-bottom: 8px; }
+.speech-sub { color: #9fa8b8; font-size: 12px; font-weight: 700; margin: 12px 0 2px; }
+.speech-dev .metric-value small { color: #8f98a8; font-weight: 400; }
+.speech-dev .lowers { color: #f0a640; }
+.speech-note { color: #f0a640; font-size: 12px; margin-top: 6px; }
+.v-rec { position: absolute; top: 52px; left: 14px; display: flex; align-items: center; gap: 7px;
+         background: rgba(201,61,69,.9); color: #fff; font-size: 12px; font-weight: 700;
+         padding: 5px 10px; border-radius: 999px; }
 </style>
 
 </head>
@@ -789,6 +808,7 @@ details.other[open] summary { margin-bottom: 10px; }
         <video id="patientVideo" autoplay playsinline></video>
         <canvas id="skeleton" class="skeleton"></canvas>
         <video id="doctorVideo" autoplay muted playsinline></video>
+        <div id="vRec" class="v-rec" hidden><span class="speech-dot"></span><span id="vRecText">Speech REC</span></div>
         <div id="vBadge" class="v-badge"><span class="dot"></span><span id="vBadgeText">Ready</span></div>
         <div id="vStance" class="v-stance" hidden></div>
         <div id="vCountdown" class="v-countdown" hidden></div>
@@ -864,6 +884,18 @@ details.other[open] summary { margin-bottom: 10px; }
 
     <!-- ===================== BESS: RESULTS ===================== -->
     <div class="col">
+        <div class="card" id="speechCard">
+            <div class="card-head">
+                <h3>Speech Analysis</h3>
+                <span id="speechChip" class="chip">Not recording</span>
+            </div>
+            <div class="speech-who">Patient ID <b id="speechPatient">–</b> (the room ID) · patient's call audio only</div>
+            <button id="speechButton" class="good">Start speech recording</button>
+            <div id="speechStatus" class="speech-status"></div>
+            <div id="speechLive" class="speech-live" hidden></div>
+            <div id="speechReport" hidden></div>
+        </div>
+
         <div class="card">
             <div class="card-head">
                 <h3>BESS Summary</h3>
@@ -1067,6 +1099,7 @@ async function createPeerConnection() {
         const stream = event.streams[0];
         if (stream) {
             $("patientVideo").srcObject = stream;
+            speechOnTrack(stream);
         }
     };
 
@@ -1203,6 +1236,7 @@ function joinCall() {
 }
 
 function endCall() {
+    speechStop();
     wantCall = false;
     clearTimeout(reconnectTimer);
     clearTimeout(callRetryTimer);
@@ -1872,6 +1906,306 @@ function renderHealth() {
 setInterval(renderHealth, 500);
 window.addEventListener("resize", drawSkeleton);
 renderHealth();
+
+
+// ==========================================================
+// SPEECH ANALYSIS (clinician starts and ends it)
+// ==========================================================
+// The patient's voice reaches this page through the WebRTC call. While
+// recording, the page taps that remote audio track (never the doctor's mic)
+// and streams it as 16-bit PCM to speech_server.py (port 8767), which scores
+// it against the patient's prior visits when the clinician ends it.
+// Other port: open the page with ?speechPort=8770.
+
+const SPEECH_PORT = new URLSearchParams(location.search).get("speechPort") || "8767";
+const speech = {
+    phase: "idle",           // idle | connecting | recording | finishing
+    ws: null, ctx: null, src: null, node: null,
+    pcm: null, pos: 0, chunkSamples: 4000,
+    t0: 0, tick: null, endTimer: null,
+};
+
+function speechURL() {
+    return (location.protocol === "https:" ? "wss:" : "ws:") + "//"
+        + (location.hostname || "localhost") + ":" + SPEECH_PORT;
+}
+
+function speechEsc(v) {
+    return String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function speechFmt(v, unit) {
+    return (v === null || v === undefined) ? "–" : speechEsc(v) + (unit || "");
+}
+
+function speechJoin(...parts) {
+    const keep = parts.filter(x => x && x !== "–");
+    return keep.length ? keep.join(" · ") : "–";
+}
+
+function speechClock(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+}
+
+function speechPatientId() {
+    return ($("roomInput").value || "").trim() || "unknown";
+}
+
+function speechStatus(text, isError) {
+    $("speechStatus").textContent = text || "";
+    $("speechStatus").classList.toggle("err", !!isError);
+}
+
+function speechRender() {
+    const b = $("speechButton"), chip = $("speechChip"), p = speech.phase;
+    $("speechPatient").textContent = speechPatientId();
+    b.disabled = (p === "connecting" || p === "finishing");
+    b.className = (p === "recording") ? "danger" : "good";
+    if (p === "recording") {
+        const t = speechClock((Date.now() - speech.t0) / 1000);
+        b.innerHTML = '<span class="speech-dot"></span>End speech recording · ' + t;
+        chip.textContent = "Recording " + t;
+        chip.className = "chip high";
+        $("vRec").hidden = false;
+        $("vRecText").textContent = "Speech REC " + t;
+    } else {
+        b.textContent = { connecting: "Connecting…", finishing: "Analyzing…" }[p] || "Start speech recording";
+        chip.textContent = { connecting: "Connecting", finishing: "Analyzing" }[p]
+            || (speech.lastReport ? "Report ready" : "Not recording");
+        chip.className = speech.lastReport && p === "idle" ? "chip ok" : "chip";
+        $("vRec").hidden = true;
+    }
+}
+
+function patientAudioStream() {
+    const s = $("patientVideo").srcObject;
+    return (s && s.getAudioTracks && s.getAudioTracks().length) ? s : null;
+}
+
+function speechSendPcm(a) {
+    if (speech.ws && speech.ws.readyState === WebSocket.OPEN) {
+        speech.ws.send(a.buffer.slice(a.byteOffset, a.byteOffset + a.byteLength));
+    }
+}
+
+function speechPush(f32) {
+    const n = speech.chunkSamples;
+    for (let i = 0; i < f32.length; i++) {
+        if (!speech.pcm) { speech.pcm = new Int16Array(n); speech.pos = 0; }
+        const v = Math.max(-1, Math.min(1, f32[i]));
+        speech.pcm[speech.pos++] = v < 0 ? v * 32768 : v * 32767;
+        if (speech.pos === n) { speechSendPcm(speech.pcm); speech.pcm = null; }
+    }
+}
+
+function speechFlush() {
+    if (speech.pcm && speech.pos) speechSendPcm(speech.pcm.subarray(0, speech.pos));
+    speech.pcm = null;
+}
+
+// (Re)connect the patient's audio track to the recorder; called again if the
+// call reconnects while recording.
+function speechAttach(stream) {
+    if (!speech.ctx || !stream) return;
+    if (speech.src) { try { speech.src.disconnect(); } catch {} }
+    speech.src = speech.ctx.createMediaStreamSource(stream);
+    speech.src.connect(speech.node);
+}
+
+function speechOnTrack(stream) {
+    if (speech.phase === "recording" && stream && stream.getAudioTracks().length) {
+        speechAttach(stream);
+    }
+}
+
+function speechStopAudio() {
+    clearInterval(speech.tick);
+    speech.tick = null;
+    if (speech.src) { try { speech.src.disconnect(); } catch {} }
+    if (speech.node) { try { speech.node.disconnect(); } catch {} speech.node.onaudioprocess = null; }
+    if (speech.ctx) { try { speech.ctx.close(); } catch {} }
+    speech.src = speech.node = speech.ctx = null;
+}
+
+function speechCloseSocket() {
+    clearTimeout(speech.endTimer);
+    if (speech.ws) {
+        speech.ws.onclose = null;
+        try { speech.ws.close(); } catch {}
+        speech.ws = null;
+    }
+}
+
+function speechFail(text) {
+    speechStopAudio();
+    speechCloseSocket();
+    speech.phase = "idle";
+    speechStatus(text, true);
+    speechRender();
+}
+
+async function speechStart() {
+    const stream = patientAudioStream();
+    if (!stream) {
+        speechStatus('No patient audio yet: join the call and wait for "Patient connected".', true);
+        return;
+    }
+    speech.phase = "connecting";
+    speechStatus("");
+    speechRender();
+
+    let ws;
+    try {
+        ws = await new Promise((resolve, reject) => {
+            const w = new WebSocket(speechURL());
+            w.binaryType = "arraybuffer";
+            const t = setTimeout(() => { try { w.close(); } catch {} reject(new Error("timeout")); }, 5000);
+            w.onopen = () => { clearTimeout(t); resolve(w); };
+            w.onerror = () => { clearTimeout(t); reject(new Error("error")); };
+        });
+    } catch {
+        speechFail("Could not reach the speech server at " + speechURL()
+            + ". Start it with: python speech_server.py");
+        return;
+    }
+    speech.ws = ws;
+    ws.onmessage = e => { try { speechMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+    ws.onclose = () => {
+        speech.ws = null;
+        if (speech.phase === "recording" || speech.phase === "finishing") {
+            speechFail("The speech server closed the connection before the report arrived. "
+                + "Check the speech_server terminal.");
+        }
+    };
+
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        await ctx.resume();
+        speech.ctx = ctx;
+        speech.chunkSamples = Math.round(ctx.sampleRate / 4);          // ~250 ms per message
+        speech.node = ctx.createScriptProcessor(4096, 1, 1);
+        speech.node.onaudioprocess = e => {
+            if (speech.phase === "recording") speechPush(e.inputBuffer.getChannelData(0));
+        };
+        speech.node.connect(ctx.destination);                          // outputs silence
+        ws.send(JSON.stringify({ type: "session_start", patient_id: speechPatientId(),
+                                 sample_rate: ctx.sampleRate }));
+        speechAttach(stream);
+    } catch (err) {
+        console.error(err);
+        speechFail("Could not record the call audio in this browser (" + err.message + ").");
+        return;
+    }
+
+    speech.phase = "recording";
+    speech.t0 = Date.now();
+    speech.tick = setInterval(speechRender, 500);
+    $("speechReport").hidden = true;
+    $("speechLive").hidden = false;
+    $("speechLive").innerHTML = '<div class="hint">Listening… first measurements in about 5 s.</div>';
+    speechStatus("Recording the patient's audio from the call.");
+    speechRender();
+}
+
+function speechStop() {
+    if (speech.phase !== "recording") return;
+    speech.phase = "finishing";
+    speechFlush();
+    speechStopAudio();
+    if (speech.ws && speech.ws.readyState === WebSocket.OPEN) {
+        speech.ws.send(JSON.stringify({ type: "session_end" }));
+    }
+    speech.endTimer = setTimeout(() => {
+        speechFail("No report after 2 minutes. The visit is still stored by the server; check its terminal.");
+    }, 120000);
+    speechStatus("Analyzing the recording and comparing it with past visits…");
+    speechRender();
+}
+
+function speechToggle() {
+    if (speech.phase === "recording") speechStop();
+    else if (speech.phase === "idle") speechStart();
+}
+
+function speechLiveHTML(m) {
+    const sr = m.speech_rate || {}, v = m.voice || {}, p = m.pauses || {};
+    const rows = [
+        ["Patient speaking", speechClock(m.speaking_time_s || 0)],
+        ["Speech rate", speechJoin(speechFmt(sr.words_per_min, " wpm"), speechFmt(sr.syllables_per_s, " syll/s"))],
+        ["Jitter", speechFmt(v.jitter_local_pct, "%")],
+        ["Shimmer", speechFmt(v.shimmer_local_pct, "%")],
+        ["Pauses", speechFmt(p.count) + (p.mean_s != null ? " (avg " + speechFmt(p.mean_s, " s") + ")" : "")],
+    ];
+    return rows.map(([k, val]) =>
+        '<div class="metric"><span class="metric-name">' + k + '</span><span class="metric-value">' + val + "</span></div>"
+    ).join("");
+}
+
+function speechReportHTML(r) {
+    const s = r.summary || {}, sr = s.speech_rate || {}, v = s.voice || {}, p = s.pauses || {};
+    const lx = s.lexical || {}, b = r.baseline || {};
+    let h = '<div class="speech-score"><b>' + speechFmt(b.voice_score) + "</b>"
+        + (b.provisional ? '<span class="chip">Provisional</span>' : '<span class="chip ok">vs. own baseline</span>')
+        + "</div>";
+    h += '<div class="speech-text">' + speechFmt(b.summary_text) + "</div>";
+    const rows = [
+        ["Call length", speechClock(r.call_duration_s || 0) + " (patient speaking " + speechClock(s.speaking_time_s || 0) + ")"],
+        ["Speech rate", speechJoin(speechFmt(sr.words_per_min, " wpm"), speechFmt(sr.syllables_per_s, " syll/s"))],
+        ["Articulation rate", speechFmt(sr.articulation_rate_syll_per_s, " syll/s")],
+        ["Jitter", speechFmt(v.jitter_local_pct, "%")],
+        ["Shimmer", speechFmt(v.shimmer_local_pct, "%")],
+        ["Pitch", speechFmt(v.f0_mean_hz, " Hz") + " (sd " + speechFmt(v.f0_sd_hz) + ")"],
+        ["Pauses", speechFmt(p.count) + " · " + speechFmt(p.per_min, "/min") + " · avg " + speechFmt(p.mean_s, " s")],
+        ["Lexical richness", speechJoin(lx.mattr != null ? "MATTR " + speechFmt(lx.mattr) : null, lx.words != null ? speechFmt(lx.words) + " words" : null)],
+        ["Lexical density", speechFmt(lx.lexical_density)],
+    ];
+    h += rows.map(([k, val]) =>
+        '<div class="metric"><span class="metric-name">' + k + '</span><span class="metric-value">' + val + "</span></div>"
+    ).join("");
+    const devs = (b.deviations || []).slice().sort((x, y) => Math.abs(y.z) - Math.abs(x.z)).slice(0, 5);
+    if (devs.length) {
+        h += '<div class="speech-sub">Compared with past visits</div><div class="speech-dev">';
+        h += devs.map(d => {
+            const z = (d.z > 0 ? "+" : "") + Number(d.z).toFixed(2);
+            const cls = (d.lowers_score && Math.abs(d.z) >= 0.5) ? ' class="lowers"' : "";
+            return '<div class="metric"><span class="metric-name">' + speechEsc(d.label) + '</span>'
+                + '<span class="metric-value"><span' + cls + ">z " + z + "</span> <small>"
+                + speechFmt(d.value) + " vs " + speechFmt(d.baseline_mean) + "</small></span></div>";
+        }).join("") + "</div>";
+    } else if (b.provisional) {
+        h += '<div class="hint">' + speechFmt(b.sessions_needed) + " more usable visit(s) before scores compare against this patient's own baseline.</div>";
+    }
+    for (const n of (r.notes || [])) h += '<div class="speech-note">' + speechEsc(n) + "</div>";
+    const st = r.stored;
+    h += '<div class="hint">' + (st ? "Saved (" + speechEsc(st.backend || "ok") + ") · visit " + speechEsc(r.visit_id)
+        : "Not saved: " + speechEsc(r.store_error || "no storage")) + "</div>";
+    h += '<div class="hint">' + speechFmt(b.disclaimer || "Not a diagnostic output.") + "</div>";
+    return h;
+}
+
+function speechMessage(m) {
+    if (m.type === "error") {
+        speechStatus("Speech server: " + m.error, true);
+        return;
+    }
+    if (m.kind === "speech_live" && speech.phase === "recording") {
+        $("speechLive").innerHTML = speechLiveHTML(m);
+    } else if (m.kind === "speech_report") {
+        speech.lastReport = m;
+        speechCloseSocket();
+        speech.phase = "idle";
+        $("speechLive").hidden = true;
+        $("speechReport").innerHTML = speechReportHTML(m);
+        $("speechReport").hidden = false;
+        speechStatus("");
+        speechRender();
+    }
+}
+
+$("speechButton").onclick = speechToggle;
+$("roomInput").addEventListener("input", speechRender);
+window.addEventListener("load", speechRender);
 
 </script>
 
