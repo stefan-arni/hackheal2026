@@ -7,7 +7,7 @@ uses your webcam in place of the iPhone.
 | | Server | Laptop client | Port | What it does |
 |---|---|---|---|---|
 | **Pose** | `server.py` | `test_client.py` | 8765 | Full-body landmarks, spine angle, single-leg balance, BESS balance test, duck → quack |
-| **Eyes** | `eye_server.py` | `eye_client.py` | 8766 | Iris tracking + alert when one eye drifts |
+| **Eyes** | `eye_server.py` | `eye_client.py` | 8766 | Iris tracking: drift alerts, saccade speed, smoothness (close-up camera) |
 
 They share only `ws_server.py` / `ws_client.py` (frame decoding and connection
 handling). Pose code lives in `pose_analyzer.py`, `balance.py`, `bess.py`, `duck.py` and
@@ -234,6 +234,46 @@ mirrored front-camera feed they're swapped.
 
 This is a demo/screening aid, not a validated medical device.
 
+## Eyes: saccades, speed and smoothness
+
+Two timed tests (10 s by default, `--test-duration`), for a close-up camera with the
+head still. In `eye_client.py` press **s** or **p** (or `--test saccades|pursuit`):
+
+| Test | What the person does | Speed | Smoothness |
+|---|---|---|---|
+| **Saccades** (`s`) | looks back and forth between two points as fast as possible | per saccade: peak and mean speed (deg/s), size (deg), duration (ms); median and max over the test | % of target-to-target jumps that landed in **one** saccade (an undershoot followed by a small corrective jump in the same direction counts against it) |
+| **Smooth pursuit** (`p`) | follows a slowly moving target, e.g. a finger moving side to side | pursuit speed (deg/s); peak speed of any catch-up saccades | % of the eye's path covered by smooth tracking rather than catch-up saccades, plus catch-up saccades per second |
+
+The window shows a live trace of left/right gaze over the last 4 seconds (saccades in
+red), the current eye speed, and the results when the test ends. Each saccade is also
+printed as it happens. `--log eyes.csv` records gaze, speed and saccades per frame.
+
+**How it's measured:** both irises' positions between the eye corners (so head
+movement isn't eye movement) are averaged and converted to degrees with a standard
+eyeball model (12 mm radius, 30 mm eye opening). There's no per-person calibration,
+so absolute degrees are approximate (roughly ±15%); comparisons between tests done
+the same way are more reliable. Speed is measured over a ~30 ms span so landmark
+jitter doesn't look like movement. A saccade is a movement over 80 deg/s
+(`--saccade-velocity`), at least 2 deg and 15-250 ms long. Each saccade's peak speed
+is then re-measured over the shortest span the frame rate allows. Blinks break the
+trace and are never counted as saccades.
+
+**Frame rate matters for speed.** Saccades peak at 300-500 deg/s and last 20-80 ms.
+On simulated saccades, measured peak speed was about 55-80% of the true value at
+30 fps, about 90% at 60 fps, and 95-100% at 120-240 fps. Saccade size and duration,
+and the smoothness scores, are fine at 30 fps. The results warn when the frame rate
+is below 50 fps or the head turned.
+
+**For accurate speed, record slow motion.** Record the test as a 120 or 240 fps
+slow-motion video on the iPhone and run `python eye_client.py --source clip.mov
+--test saccades`. The video's own timestamps are used, so it doesn't matter how fast
+the laptop processes it. When streaming live, send frames as JSON with
+`"timestamp_ms"` (capture time); `eye_client.py` now does this by default
+(`--binary` turns it off). Capture timestamps keep network and processing delays out
+of the speed numbers.
+
+This is a demo/screening aid, not a validated clinical measurement.
+
 ## WebSocket protocol (for the iPhone app)
 
 Same input format for both servers. Connect to `ws://<laptop-LAN-IP>:8765` (pose) or
@@ -246,6 +286,9 @@ Same input format for both servers. Connect to `ws://<laptop-LAN-IP>:8765` (pose
   orientation, so send upright frames or set `rotate`.
 - `{"type":"ping"}` → `{"type":"pong"}`
 - `{"type":"recalibrate"}` → pose server: reset balance stats, floor calibration and quack count; eye server: re-learn the baseline
+- Eye server tests: `{"type":"eye_test_start","mode":"saccades"|"pursuit","duration":10}`,
+  `{"type":"eye_test_cancel"}`, `{"type":"eye_test_status"}` → immediate `ack` or `error`.
+  For eye speeds, send frames as JSON with `"timestamp_ms"` = capture time.
 - Pose server, BESS: `{"type":"bess_start","stance":"double"|"tandem"|"single","nondominant":"left"|"right"}`,
   `{"type":"bess_cancel"}`, `{"type":"bess_reset"}`, `{"type":"bess_status"}`,
   `{"type":"bess_mark","error":"hands_off_hips"}` (manual error). Each gets an immediate
@@ -318,7 +361,26 @@ the score may be missing errors.
 ```
 
 `state` is `"calibrating"` (with `calibration_progress` 0–1) until the baseline is
-learned, then `"monitoring"`. When something changes, an extra message follows that
+learned, then `"monitoring"`. Each eye result also has
+`"movement": {"gaze_deg": [x, y], "velocity_dps": 12.5, "in_saccade": false, "saccade": null}`
+and `"eye_test": {"running": true, "mode": "saccades", "time_left": 6.2, "saccades": 7}`.
+During a test:
+
+```json
+{"type": "event", "kind": "saccade", "amplitude_deg": 20.3, "peak_velocity_dps": 561,
+ "mean_velocity_dps": 304, "duration_ms": 67, "direction": "right", "t_start": ..., "t_end": ...}
+{"type": "result", "kind": "eye_test_done", "mode": "saccades", "label": "Saccades", "duration_s": 10.0,
+ "speed": {"count": 12, "per_second": 1.2,
+           "peak_velocity_dps": {"median": 560, "max": 610, "min": 470},
+           "mean_velocity_dps": {...}, "amplitude_deg": {...}, "duration_ms": {...}},
+ "smoothness": {"score": 86, "primary_saccades": 11, "corrective_saccades": 1, "single_step_pct": 86,
+                "peak_velocity_cv": 0.08, "explanation": "..."},
+ "quality": {"samples": 1200, "effective_fps": 120.0, "tracked_pct": 99, "warnings": []},
+ "saccades": [...]}
+```
+
+For `"mode": "pursuit"`, `smoothness` has `score`, `smooth_path_pct`,
+`catch_up_saccades`, `catch_up_per_second` and `pursuit_speed_dps`. When something changes, an extra message follows that
 frame's result, so the app can react without checking every frame:
 
 ```json

@@ -57,13 +57,15 @@ class RemoteClient:
         self.frame_id = 0
         self.replies: list[dict] = []   # replies to commands (acks, command errors)
 
-    def __call__(self, frame, quality: int = 80) -> dict:
+    def __call__(self, frame, quality: int = 80, timestamp_ms: float | None = None) -> dict:
+        """timestamp_ms: when the frame was captured (default: now). Only sent in
+        JSON mode; binary frames carry no metadata."""
         jpeg = encode_frame(frame, quality)
         self.frame_id += 1
         if self.use_json:
             self.ws.send(json.dumps({
                 "type": "frame", "frame_id": self.frame_id,
-                "timestamp_ms": int(time.time() * 1000),
+                "timestamp_ms": round(timestamp_ms if timestamp_ms is not None else time.time() * 1000, 3),
                 "image": base64.b64encode(jpeg).decode("ascii"),
             }))
         else:

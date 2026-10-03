@@ -200,10 +200,18 @@ def frame_check(eyes: dict, yaw: float, cfg: MonitorConfig) -> str | None:
 # --------------------------------------------------------------------------- #
 
 class EyeAnalyzer:
-    """One per video stream (VIDEO mode needs increasing timestamps)."""
+    """One per video stream (VIDEO mode needs increasing timestamps).
 
-    def __init__(self, cfg: MonitorConfig | None = None):
+    Runs the eye-drift monitor and the eye-movement analysis (saccades, speed,
+    smoothness; see eye_movement.py) on the same iris tracking.
+    """
+
+    def __init__(self, cfg: MonitorConfig | None = None, movement_cfg=None):
+        from eye_movement import EyeMovementTest, GazeTracker, MovementConfig
         self.cfg = cfg or MonitorConfig()
+        mcfg = movement_cfg or MovementConfig()
+        self.gaze = GazeTracker(mcfg)
+        self.test = EyeMovementTest(mcfg)
         options = vision.FaceLandmarkerOptions(
             base_options=mp_python.BaseOptions(model_asset_path=str(ensure_face_model())),
             running_mode=vision.RunningMode.VIDEO,
@@ -220,7 +228,12 @@ class EyeAnalyzer:
         self._last_ts = ts
         return ts
 
-    def process_bgr(self, frame_bgr: np.ndarray, t: float | None = None) -> dict:
+    def process_bgr(self, frame_bgr: np.ndarray, t: float | None = None, meta: dict | None = None) -> dict:
+        """`meta` is the frame's message metadata; its "timestamp_ms" (capture time
+        from the phone or test client) is used as the frame time when present, so
+        eye speeds aren't distorted by network or processing delays."""
+        if t is None and meta and meta.get("timestamp_ms") is not None:
+            t = float(meta["timestamp_ms"]) / 1000.0
         h, w = frame_bgr.shape[:2]
         image = mp.Image(image_format=mp.ImageFormat.SRGB,
                          data=cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
@@ -231,7 +244,9 @@ class EyeAnalyzer:
 
         if not res.face_landmarks or len(res.face_landmarks[0]) < 478:
             status = self.monitor.update(t, None, "no_face")
-            return {"face_detected": False, "inference_ms": round(ms, 1), **status}
+            gaze = self.gaze.update(t, None)
+            return {"face_detected": False, "inference_ms": round(ms, 1), **status,
+                    "movement": gaze, "eye_test": self.test.update(t, None, None)}
 
         pts = np.array([[lm.x * w, lm.y * h] for lm in res.face_landmarks[0]])
         return self.analyze_points(pts, t, ms)
@@ -239,7 +254,13 @@ class EyeAnalyzer:
     def analyze_points(self, pts: np.ndarray, t: float, ms: float = 0.0) -> dict:
         eyes = {name: eye_geometry(pts, spec) for name, spec in EYES.items()}
         yaw = head_yaw_ratio(pts)
-        status = self.monitor.update(t, eyes, frame_check(eyes, yaw, self.cfg))
+        skip = frame_check(eyes, yaw, self.cfg)
+        status = self.monitor.update(t, eyes, skip)
+        # eye movement: blinks and a too-small face break the trace; a turned
+        # head is still measured (eye position is relative to the eye corners)
+        usable = skip not in ("blink", "face_too_small")
+        gaze = self.gaze.update(t, eyes if usable else None)
+        test = self.test.update(t, gaze if usable else None, yaw)
         return {
             "face_detected": True,
             "inference_ms": round(ms, 1),
@@ -247,10 +268,18 @@ class EyeAnalyzer:
             "eyes": {name: {k: (round(v, 4) if isinstance(v, float) else v) for k, v in g.items()}
                      for name, g in eyes.items()},
             **status,
+            "movement": gaze,
+            "eye_test": test,
         }
+
+    def handle_command(self, msg: dict) -> list[dict]:
+        """eye_test_start {"mode": "saccades" | "pursuit", "duration": s} /
+        eye_test_cancel / eye_test_status."""
+        return self.test.handle_command(msg)
 
     def recalibrate(self):
         self.monitor.reset()
+        self.gaze.reset()
 
     def close(self):
         self._landmarker.close()

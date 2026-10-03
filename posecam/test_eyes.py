@@ -61,9 +61,11 @@ def make_face(r_h=0.5, l_h=0.5, r_v=0.0, l_v=0.0, openness=0.3, yaw=0.0, roll_de
 
 def analyzer(**cfg):
     """EyeAnalyzer without loading the MediaPipe model."""
+    from eye_movement import EyeMovementTest, GazeTracker, MovementConfig
     a = EyeAnalyzer.__new__(EyeAnalyzer)
     a.cfg = MonitorConfig(**cfg)
     a.monitor = AlignmentMonitor(a.cfg)
+    a.gaze, a.test = GazeTracker(MovementConfig()), EyeMovementTest(MovementConfig())
     return a
 
 

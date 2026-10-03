@@ -72,13 +72,20 @@ class Connection:
         self.processed = 0
         self.lock = threading.Lock()  # never close the model while it's mid-frame
         self.recalibrate_pending = False
+        # analyzers that accept the frame's metadata (e.g. its capture timestamp) get it
+        import inspect
+        try:
+            self._takes_meta = "meta" in inspect.signature(analyzer.process_bgr).parameters
+        except (TypeError, ValueError):
+            self._takes_meta = False
 
-    def _run(self, frame):
+    def _run(self, frame, meta=None):
         with self.lock:
             if self.recalibrate_pending and hasattr(self.analyzer, "recalibrate"):
                 self.analyzer.recalibrate()
                 self.recalibrate_pending = False
-            result = self.analyzer.process_bgr(frame)
+            result = (self.analyzer.process_bgr(frame, meta=meta) if self._takes_meta
+                      else self.analyzer.process_bgr(frame))
         return result.to_dict() if hasattr(result, "to_dict") else result
 
     def _close(self):
@@ -129,7 +136,7 @@ class Connection:
             self.latest = None
             # MediaPipe is blocking; run it off the event loop.
             try:
-                result = await asyncio.to_thread(self._run, frame)
+                result = await asyncio.to_thread(self._run, frame, meta)
             except Exception as e:
                 log.exception("frame processing failed")
                 await self.ws.send(json.dumps({"type": "error", "error": f"processing failed: {e!r}"}))
