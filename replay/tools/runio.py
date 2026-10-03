@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import trimesh
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from service.runs import FLIPS, to_camera  # noqa: E402,F401
 
 
 @dataclass
@@ -32,7 +36,7 @@ def load_run(run_dir: Path) -> tuple[list[Frame], list[str]]:
     frames: list[Frame] = []
     names: list[str] = []
     for p in sorted(run_dir.glob("*.json")):
-        if p.name in ("summary.json", "conventions.json", "noise_floor.json"):
+        if p.name in ("summary.json", "conventions.json", "noise_floor.json", "ground_truth.json"):
             continue
         rec = json.loads(p.read_text())
         if not rec.get("usable"):
@@ -63,21 +67,6 @@ def find_keypoints(names: list[str], *patterns: str) -> list[int]:
     """Indices of keypoints whose name contains any of the patterns (case-insensitive)."""
     pats = [s.lower() for s in patterns]
     return [i for i, n in enumerate(names) if any(s in n.lower() for s in pats)]
-
-
-# Axis sign variants tried by the convention check. Applied before adding cam_t.
-FLIPS: dict[str, tuple[float, float, float]] = {
-    "identity": (1, 1, 1),
-    "flip_y": (1, -1, 1),
-    "flip_yz": (1, -1, -1),
-    "flip_x": (-1, 1, 1),
-    "flip_xy": (-1, -1, 1),
-}
-
-
-def to_camera(points: np.ndarray, cam_t: np.ndarray, flip: str, add_cam_t: bool) -> np.ndarray:
-    out = points * np.asarray(FLIPS[flip])
-    return out + cam_t if add_cam_t else out
 
 
 def load_conventions(run_dir: Path) -> dict | None:
