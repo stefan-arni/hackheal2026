@@ -139,7 +139,8 @@ def secs(x):
 
 def do_test(s, stance, segments, nondominant="left", eyes=None, t0=0.0):
     """Start a stance, hold the clean position through the countdown, then play
-    `segments` = [(seconds, pose kwargs)] for the 20 s trial. Returns the done event."""
+    `segments` = [(seconds, pose kwargs)] for the trial (`s.cfg.duration_s` long).
+    Returns the done event."""
     s.start(stance, nondominant, t=t0)
     clean = pose(stance=stance, nondominant=nondominant)
     res, t = run(s, [clean] * secs(2.0) + [clean], t0)
@@ -147,7 +148,7 @@ def do_test(s, stance, segments, nondominant="left", eyes=None, t0=0.0):
     frames = []
     for dur, kw in segments:
         frames += [pose(stance=stance, nondominant=nondominant, **kw)] * secs(dur)
-    remaining = secs(20.5) - len(frames)
+    remaining = secs(s.cfg.duration_s + 0.5) - len(frames)
     frames += [clean] * max(remaining, 0)
     res, t = run(s, frames, t, eyes)
     done = [e for r in res for e in r["events"] if e["kind"] == "bess_done"]
@@ -260,7 +261,7 @@ def test_fall():
 
 
 def test_max_10_errors():
-    s = session()
+    s = session(duration_s=20.0)      # 16 errors spread over ~19 s
     segs = [(0.6, {"hands": "down"}), (0.6, {})] * 16
     done, _ = do_test(s, "double", segs)
     assert done["errors"] == 10
@@ -276,7 +277,7 @@ def test_hidden_body_holds_state():
 # ------------------------------- session ------------------------------------ #
 
 def test_full_session_breakdown():
-    s = session()
+    s = session(duration_s=20.0)      # the single-leg script runs to ~12 s
     d1, _ = do_test(s, "double", [(3, {}), (1, {"hands": "left"})])
     d2, _ = do_test(s, "tandem", [(3, {}), (1, {"hands": "left"}), (3, {}), (1, {"step": ("right", 0.2)})])
     d3, _ = do_test(s, "single", [(3, {}), (1, {"abd": {"right": 40}}), (3, {}), (1, {"touch": True}),
@@ -287,6 +288,15 @@ def test_full_session_breakdown():
     # re-running a stance replaces its score
     d1b, _ = do_test(s, "double", [])
     assert d1b["session"]["scores"]["double"] == 0 and d1b["session"]["total"] == 5
+
+
+def test_default_stance_is_10_seconds():
+    assert BessConfig().duration_s == 10.0
+    s = session()
+    done, res = do_test(s, "double", [])
+    running = [r for r in res if r["phase"] == "running"]
+    assert running[0]["duration_s"] == 10.0 and running[0]["time_left"] <= 10.0
+    assert len([r for r in res if r["phase"] == "running"]) == pytest.approx(secs(10.0), abs=2)
 
 
 def test_countdown_waits_then_fails_without_view():
@@ -314,11 +324,37 @@ def test_setup_warnings():
     running = [e for r in res for e in r["events"] if e["kind"] == "bess_running"][0]
     assert any("dominant" in w for w in running["warnings"])
 
+    # tandem with the right foot in back (iPhone depth: right ankle further away)
+    wrong = pose(stance="tandem", nondominant="right")
+    wrong["depth"] = {"ankles_m": {"left": 2.30, "right": 2.55}}
     s = session()
     s.start("tandem", "left", t=0)
-    res, _ = run(s, [pose(stance="tandem", nondominant="right")] * secs(2.2))
+    res, _ = run(s, [wrong] * secs(2.2))
     running = [e for r in res for e in r["events"] if e["kind"] == "bess_running"][0]
     assert any("in back" in w for w in running["warnings"])
+
+    right = pose(stance="tandem", nondominant="left")
+    right["depth"] = {"ankles_m": {"left": 2.55, "right": 2.30}}
+    s = session()
+    s.start("tandem", "left", t=0)
+    res, _ = run(s, [right] * secs(2.2))
+    running = [e for r in res for e in r["events"] if e["kind"] == "bess_running"][0]
+    assert not any("in back" in w for w in running["warnings"])
+
+
+def test_back_foot_from_depth_or_image():
+    back = BessSession._back_foot
+    base = {"leg": 300.0, "heel_y": {"left": 800.0, "right": 830.0},
+            "toe_y": {"left": 790.0, "right": 820.0}, "ankle_depth_m": None}
+    assert back(base) == "left"                       # left sits higher in the image = further
+    base["ankle_depth_m"] = {"left": 2.3, "right": 2.6}
+    assert back(base) == "right"                      # real depth wins over the image
+    base["ankle_depth_m"] = {"left": 2.40, "right": 2.42}
+    assert back(base) is None                         # too close to tell: no warning
+    base["ankle_depth_m"] = None
+    base["heel_y"] = {"left": 800.0, "right": 802.0}
+    base["toe_y"] = {"left": 790.0, "right": 792.0}
+    assert back(base) is None
 
 
 def test_commands():

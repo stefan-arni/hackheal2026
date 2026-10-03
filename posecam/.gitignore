@@ -1,0 +1,11 @@
+# local environment and generated data (not code)
+.venv/
+__pycache__/
+.pytest_cache/
+recordings/
+television_recordings/
+television_history.db
+*.mov
+models/
+xcuserdata/
+.DS_Store

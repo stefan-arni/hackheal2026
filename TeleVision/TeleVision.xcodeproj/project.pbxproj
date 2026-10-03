@@ -1,0 +1,651 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2D1045443070BBBA00FFCAE3 /* MediaPipeTasksText in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1045433070BBBA00FFCAE3 /* MediaPipeTasksText */; };
+		2D1045463070BBBA00FFCAE3 /* MediaPipeTasksVision in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1045453070BBBA00FFCAE3 /* MediaPipeTasksVision */; };
+		2D10454D30710F0E00FFCAE3 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 2D10454C30710F0E00FFCAE3 /* WebRTC */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2D7A29EC3070ACE200EACF81 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2D7A29D23070ACDF00EACF81 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2D7A29D93070ACDF00EACF81;
+			remoteInfo = TeleVision;
+		};
+		2D7A29F63070ACE200EACF81 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2D7A29D23070ACDF00EACF81 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2D7A29D93070ACDF00EACF81;
+			remoteInfo = TeleVision;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		2D7A29DA3070ACDF00EACF81 /* TeleVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TeleVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2D7A29EB3070ACE200EACF81 /* TeleVisionTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TeleVisionTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2D7A29F53070ACE200EACF81 /* TeleVisionUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TeleVisionUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		2D7A29FB3070ACE200EACF81 /* Exceptions for "TeleVision" folder in "TeleVision" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 2D7A29D93070ACDF00EACF81 /* TeleVision */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		2D7A29DC3070ACDF00EACF81 /* TeleVision */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				2D7A29FB3070ACE200EACF81 /* Exceptions for "TeleVision" folder in "TeleVision" target */,
+			);
+			path = TeleVision;
+			sourceTree = "<group>";
+		};
+		2D7A29EE3070ACE200EACF81 /* TeleVisionTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TeleVisionTests;
+			sourceTree = "<group>";
+		};
+		2D7A29F83070ACE200EACF81 /* TeleVisionUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TeleVisionUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2D7A29D73070ACDF00EACF81 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2D1045443070BBBA00FFCAE3 /* MediaPipeTasksText in Frameworks */,
+				2D10454D30710F0E00FFCAE3 /* WebRTC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D7A29E83070ACE200EACF81 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2D1045463070BBBA00FFCAE3 /* MediaPipeTasksVision in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D7A29F23070ACE200EACF81 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2D7A29D13070ACDF00EACF81 = {
+			isa = PBXGroup;
+			children = (
+				2D7A29DC3070ACDF00EACF81 /* TeleVision */,
+				2D7A29EE3070ACE200EACF81 /* TeleVisionTests */,
+				2D7A29F83070ACE200EACF81 /* TeleVisionUITests */,
+				2D7A29DB3070ACDF00EACF81 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2D7A29DB3070ACDF00EACF81 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2D7A29DA3070ACDF00EACF81 /* TeleVision.app */,
+				2D7A29EB3070ACE200EACF81 /* TeleVisionTests.xctest */,
+				2D7A29F53070ACE200EACF81 /* TeleVisionUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2D7A29D93070ACDF00EACF81 /* TeleVision */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2D7A29FC3070ACE200EACF81 /* Build configuration list for PBXNativeTarget "TeleVision" */;
+			buildPhases = (
+				2D7A29D63070ACDF00EACF81 /* Sources */,
+				2D7A29D73070ACDF00EACF81 /* Frameworks */,
+				2D7A29D83070ACDF00EACF81 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				2D7A29DC3070ACDF00EACF81 /* TeleVision */,
+			);
+			name = TeleVision;
+			packageProductDependencies = (
+				2D1045433070BBBA00FFCAE3 /* MediaPipeTasksText */,
+				2D10454C30710F0E00FFCAE3 /* WebRTC */,
+			);
+			productName = TeleVision;
+			productReference = 2D7A29DA3070ACDF00EACF81 /* TeleVision.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2D7A29EA3070ACE200EACF81 /* TeleVisionTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2D7A2A013070ACE200EACF81 /* Build configuration list for PBXNativeTarget "TeleVisionTests" */;
+			buildPhases = (
+				2D7A29E73070ACE200EACF81 /* Sources */,
+				2D7A29E83070ACE200EACF81 /* Frameworks */,
+				2D7A29E93070ACE200EACF81 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2D7A29ED3070ACE200EACF81 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				2D7A29EE3070ACE200EACF81 /* TeleVisionTests */,
+			);
+			name = TeleVisionTests;
+			packageProductDependencies = (
+				2D1045453070BBBA00FFCAE3 /* MediaPipeTasksVision */,
+			);
+			productName = TeleVisionTests;
+			productReference = 2D7A29EB3070ACE200EACF81 /* TeleVisionTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		2D7A29F43070ACE200EACF81 /* TeleVisionUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2D7A2A043070ACE200EACF81 /* Build configuration list for PBXNativeTarget "TeleVisionUITests" */;
+			buildPhases = (
+				2D7A29F13070ACE200EACF81 /* Sources */,
+				2D7A29F23070ACE200EACF81 /* Frameworks */,
+				2D7A29F33070ACE200EACF81 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2D7A29F73070ACE200EACF81 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				2D7A29F83070ACE200EACF81 /* TeleVisionUITests */,
+			);
+			name = TeleVisionUITests;
+			productName = TeleVisionUITests;
+			productReference = 2D7A29F53070ACE200EACF81 /* TeleVisionUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2D7A29D23070ACDF00EACF81 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					2D7A29D93070ACDF00EACF81 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					2D7A29EA3070ACE200EACF81 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 2D7A29D93070ACDF00EACF81;
+					};
+					2D7A29F43070ACE200EACF81 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 2D7A29D93070ACDF00EACF81;
+					};
+				};
+			};
+			buildConfigurationList = 2D7A29D53070ACDF00EACF81 /* Build configuration list for PBXProject "TeleVision" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 2D7A29D13070ACDF00EACF81;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2D1045423070BBBA00FFCAE3 /* XCRemoteSwiftPackageReference "mediapipe" */,
+				2D10454B30710F0E00FFCAE3 /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 2D7A29DB3070ACDF00EACF81 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				2D7A29D93070ACDF00EACF81 /* TeleVision */,
+				2D7A29EA3070ACE200EACF81 /* TeleVisionTests */,
+				2D7A29F43070ACE200EACF81 /* TeleVisionUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		2D7A29D83070ACDF00EACF81 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D7A29E93070ACE200EACF81 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D7A29F33070ACE200EACF81 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2D7A29D63070ACDF00EACF81 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D7A29E73070ACE200EACF81 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D7A29F13070ACE200EACF81 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		2D7A29ED3070ACE200EACF81 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2D7A29D93070ACDF00EACF81 /* TeleVision */;
+			targetProxy = 2D7A29EC3070ACE200EACF81 /* PBXContainerItemProxy */;
+		};
+		2D7A29F73070ACE200EACF81 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2D7A29D93070ACDF00EACF81 /* TeleVision */;
+			targetProxy = 2D7A29F63070ACE200EACF81 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2D7A29FD3070ACE200EACF81 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = PQ2Z794HCW;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TeleVision/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Camera is used to measure finger distance";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TeleVision uses the microphone for video calls with your doctor.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "TeleVision saves recorded videos to your photo library.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aishwarya.television;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2D7A29FE3070ACE200EACF81 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = PQ2Z794HCW;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TeleVision/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Camera is used to measure finger distance";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TeleVision uses the microphone for video calls with your doctor.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "TeleVision saves recorded videos to your photo library.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aishwarya.television;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		2D7A29FF3070ACE200EACF81 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		2D7A2A003070ACE200EACF81 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		2D7A2A023070ACE200EACF81 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.TeleVisionTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TeleVision.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TeleVision";
+			};
+			name = Debug;
+		};
+		2D7A2A033070ACE200EACF81 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.TeleVisionTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TeleVision.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TeleVision";
+			};
+			name = Release;
+		};
+		2D7A2A053070ACE200EACF81 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.TeleVisionUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TeleVision;
+			};
+			name = Debug;
+		};
+		2D7A2A063070ACE200EACF81 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.TeleVisionUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TeleVision;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2D7A29D53070ACDF00EACF81 /* Build configuration list for PBXProject "TeleVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2D7A29FF3070ACE200EACF81 /* Debug */,
+				2D7A2A003070ACE200EACF81 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2D7A29FC3070ACE200EACF81 /* Build configuration list for PBXNativeTarget "TeleVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2D7A29FD3070ACE200EACF81 /* Debug */,
+				2D7A29FE3070ACE200EACF81 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2D7A2A013070ACE200EACF81 /* Build configuration list for PBXNativeTarget "TeleVisionTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2D7A2A023070ACE200EACF81 /* Debug */,
+				2D7A2A033070ACE200EACF81 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2D7A2A043070ACE200EACF81 /* Build configuration list for PBXNativeTarget "TeleVisionUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2D7A2A053070ACE200EACF81 /* Debug */,
+				2D7A2A063070ACE200EACF81 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2D1045423070BBBA00FFCAE3 /* XCRemoteSwiftPackageReference "mediapipe" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google-ai-edge/mediapipe.git";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		2D10454B30710F0E00FFCAE3 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				branch = latest;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2D1045433070BBBA00FFCAE3 /* MediaPipeTasksText */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2D1045423070BBBA00FFCAE3 /* XCRemoteSwiftPackageReference "mediapipe" */;
+			productName = MediaPipeTasksText;
+		};
+		2D1045453070BBBA00FFCAE3 /* MediaPipeTasksVision */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2D1045423070BBBA00FFCAE3 /* XCRemoteSwiftPackageReference "mediapipe" */;
+			productName = MediaPipeTasksVision;
+		};
+		2D10454C30710F0E00FFCAE3 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2D10454B30710F0E00FFCAE3 /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 2D7A29D23070ACDF00EACF81 /* Project object */;
+}

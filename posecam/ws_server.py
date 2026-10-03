@@ -11,6 +11,11 @@ Client -> server:
   - {"type": "frame", "image": "<base64 JPEG>", "frame_id": 42,
      "timestamp_ms": 1696291200000, "rotate": 0}
     `rotate` (0/90/180/270, clockwise) is optional, for frames that arrive sideways.
+    Optional depth map (LiDAR / TrueDepth): "depth", "depth_format", "depth_size",
+    "intrinsics", see depth.py. It's rotated with the image and handed to the
+    analyzer as meta["_depth"] (metres) and meta["_intrinsics"].
+  - {"type": "record_start", "name": "optional"} / {"type": "record_stop"} ->
+    save every incoming message to recordings/<name>.jsonl (replay: playback.py)
   - {"type": "ping"} -> {"type": "pong"}
   - {"type": "recalibrate"} -> calls analyzer.recalibrate() before the next frame
     (only if the analyzer has one)
@@ -26,7 +31,6 @@ import json
 import logging
 import socket
 import threading
-import time
 from typing import Callable
 
 import cv2
@@ -56,17 +60,46 @@ def decode_message(message) -> tuple[np.ndarray | None, dict]:
     rot = int(meta.get("rotate", 0)) % 360
     if rot in ROTATIONS:
         frame = cv2.rotate(frame, ROTATIONS[rot])
+    if "depth" in meta:   # LiDAR / TrueDepth map from the iPhone, rotated the same way
+        from depth import decode_depth
+        meta["_depth"], meta["_intrinsics"] = decode_depth(meta, rot)
     return frame, meta
+
+
+class Recorder:
+    """Saves every incoming message (frames incl. depth, and commands) as one JSON
+    line each, so a session can be replayed exactly with playback.py."""
+
+    def __init__(self, directory: str = "recordings", name: str | None = None):
+        import os
+        import time as _time
+        os.makedirs(directory, exist_ok=True)
+        name = name or _time.strftime("%Y%m%d-%H%M%S")
+        safe = "".join(c for c in name if c.isalnum() or c in "-_") or "session"
+        self.path = os.path.join(directory, safe + ".jsonl")
+        self._f = open(self.path, "a")
+        self.messages = 0
+
+    def write(self, message):
+        if isinstance(message, (bytes, bytearray)):
+            message = json.dumps({"type": "frame", "image": base64.b64encode(message).decode("ascii")})
+        self._f.write(message.rstrip("\n") + "\n")
+        self.messages += 1
+
+    def close(self):
+        self._f.close()
 
 
 class Connection:
     """One client stream. Keeps only the newest frame and processes it."""
 
-    def __init__(self, ws, analyzer, result_type: str, events_fn: EventsFn | None = None, forwarder=None,
-                 publisher=None):
+    def __init__(self, ws, analyzer, result_type: str, events_fn: EventsFn | None = None,
+                 record_dir: str | None = None, record_all: bool = False):
         self.ws = ws
-        self.forwarder = forwarder  # optional replay_forward.ReplayForwarder (frames + events)
-        self.publisher = publisher  # optional replay_publish.LivePublisher (dashboard summaries + events)
+        self.record_dir = record_dir or "recordings"
+        self.recorder: Recorder | None = Recorder(self.record_dir) if record_all else None
+        if self.recorder:
+            log.info("recording to %s", self.recorder.path)
         self.analyzer = analyzer
         self.result_type = result_type
         self.events_fn = events_fn
@@ -100,8 +133,34 @@ class Connection:
         with self.lock:
             return self.analyzer.handle_command(msg)
 
+    def _record_command(self, meta) -> dict | None:
+        """record_start {name?} / record_stop. Returns the reply, or None."""
+        kind = meta.get("type")
+        if kind == "record_start":
+            if self.recorder is None:
+                self.recorder = Recorder(self.record_dir, meta.get("name"))
+                log.info("recording to %s", self.recorder.path)
+            return {"type": "ack", "command": kind, "recording": True, "file": self.recorder.path}
+        if kind == "record_stop":
+            out = {"type": "ack", "command": kind, "recording": False}
+            if self.recorder is not None:
+                out.update(file=self.recorder.path, messages=self.recorder.messages)
+                log.info("recording stopped: %s (%d messages)", self.recorder.path, self.recorder.messages)
+                self.recorder.close()
+                self.recorder = None
+            return out
+        return None
+
+    def close_recorder(self):
+        if self.recorder is not None:
+            log.info("recording saved: %s (%d messages)", self.recorder.path, self.recorder.messages)
+            self.recorder.close()
+            self.recorder = None
+
     async def receive_loop(self):
         async for message in self.ws:
+            if self.recorder is not None:
+                self.recorder.write(message)
             try:
                 frame, meta = decode_message(message)
             except Exception as e:  # bad payload: tell the client, keep going
@@ -110,6 +169,8 @@ class Connection:
             if frame is None:
                 if meta.get("type") == "ping":
                     await self.ws.send(json.dumps({"type": "pong"}))
+                elif meta.get("type") in ("record_start", "record_stop"):
+                    await self.ws.send(json.dumps(self._record_command(meta)))
                 elif meta.get("type") == "recalibrate":
                     self.recalibrate_pending = True
                     log.info("recalibration requested")
@@ -127,28 +188,10 @@ class Connection:
                         {"type": "error", "error": f"unknown message type {meta.get('type')!r}",
                          "command": meta.get("type")}))
                 continue
-            if self.forwarder is not None or self.publisher is not None:
-                recv_ms = time.time() * 1000
-                if self.forwarder is not None:  # every received frame (even ones the model drops)
-                    self._offer(message, frame, meta, recv_ms)
-                meta = {**meta, "server_recv_ms": recv_ms}  # copy: the analyzer's meta is unchanged otherwise
             if self.latest is not None:
                 self.dropped += 1
             self.latest = (frame, meta)
             self.ready.set()
-
-    def _offer(self, message, frame, meta, recv_ms):
-        """Hand the full frame to the forwarder: the JPEG as received, re-encoded only if rotated."""
-        try:
-            if int(meta.get("rotate", 0)) % 360:
-                jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
-            elif isinstance(message, (bytes, bytearray)):
-                jpeg = bytes(message)
-            else:
-                jpeg = base64.b64decode(json.loads(message)["image"])
-            self.forwarder.offer_frame(jpeg, meta.get("timestamp_ms"), (frame.shape[1], frame.shape[0]), recv_ms)
-        except Exception:
-            log.exception("replay forward: could not offer frame")
 
     async def process_loop(self):
         while True:
@@ -176,24 +219,13 @@ class Connection:
                 **result,
                 "dropped_frames": self.dropped,
             }))
-            msgs = []
             if self.events_fn:
-                msgs = self.events_fn(result, frame_id)
-                for msg in msgs:  # every event carries the capture time of the frame that triggered it
-                    msg.setdefault("client_timestamp_ms", meta.get("timestamp_ms"))
+                for msg in self.events_fn(result, frame_id):
                     await self.ws.send(json.dumps(msg))
-                if self.forwarder is not None and msgs:
-                    self.forwarder.on_messages(msgs, meta.get("timestamp_ms"), meta.get("server_recv_ms"))
-            if self.publisher is not None:
-                try:
-                    self.publisher.on_result(result, msgs, meta.get("timestamp_ms"), meta.get("server_recv_ms"),
-                                             (frame.shape[1], frame.shape[0]))
-                except Exception:
-                    log.exception("live publish: could not queue result")
 
 
 def make_handler(analyzer_factory, result_type: str = "result", events_fn: EventsFn | None = None,
-                 *, forwarder_factory=None, publisher_factory=None):
+                 record_dir: str | None = None, record_all: bool = False):
     async def handler(ws):
         peer = ws.remote_address
         log.info("client connected: %s (loading model...)", peer)
@@ -204,9 +236,7 @@ def make_handler(analyzer_factory, result_type: str = "result", events_fn: Event
             await ws.send(json.dumps({"type": "error", "error": f"model failed to load: {e!r}"}))
             return
         log.info("model ready for %s", peer)
-        forwarder = forwarder_factory() if forwarder_factory else None
-        conn = Connection(ws, analyzer, result_type, events_fn, forwarder=forwarder,
-                          publisher=publisher_factory(forwarder) if publisher_factory else None)
+        conn = Connection(ws, analyzer, result_type, events_fn, record_dir, record_all)
         worker = asyncio.create_task(conn.process_loop())
         try:
             await conn.receive_loop()
@@ -215,6 +245,7 @@ def make_handler(analyzer_factory, result_type: str = "result", events_fn: Event
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+            conn.close_recorder()
             await asyncio.to_thread(conn._close)
             log.info("client %s disconnected (processed=%d dropped=%d)",
                      peer, conn.processed, conn.dropped)
@@ -232,11 +263,10 @@ def lan_ip() -> str:
 
 
 async def serve(host: str, port: int, analyzer_factory, result_type: str = "result",
-                events_fn: EventsFn | None = None, name: str = "server", forwarder_factory=None,
-                publisher_factory=None):
+                events_fn: EventsFn | None = None, name: str = "server",
+                record_dir: str | None = None, record_all: bool = False):
     async with websockets.serve(make_handler(analyzer_factory, result_type, events_fn,
-                                             forwarder_factory=forwarder_factory,
-                                             publisher_factory=publisher_factory),
+                                             record_dir, record_all),
                                 host, port, max_size=8 * 1024 * 1024):
         log.info("%s listening on ws://%s:%d  (iPhone: ws://%s:%d)",
                  name, host, port, lan_ip(), port)
