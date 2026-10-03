@@ -1,6 +1,6 @@
 """BESS (Balance Error Scoring System), firm surface, scored from pose landmarks.
 
-Three 20-second stances, eyes closed, hands on hips:
+Three stances (`BessConfig.duration_s` each, 10 s by default), eyes closed, hands on hips:
   "double": feet together
   "tandem": one foot in front of the other, NON-dominant foot in back
   "single": standing on the NON-dominant leg
@@ -69,9 +69,9 @@ def _g(lm, k):
 
 @dataclass
 class BessConfig:
-    duration_s: float = 20.0
-    countdown_s: float = 5.0           # time to get into position after pressing start
-    baseline_s: float = 1.0            # last part of the countdown = start position
+    duration_s: float = 10.0
+    countdown_s: float = 1.0           # before scoring; just long enough to record the
+    baseline_s: float = 1.0            # start position (last `baseline_s` of the countdown)
     max_wait_s: float = 10.0           # extra time allowed if the start position can't be seen
     hands_off_floor: float = 0.45      # wrist-hip distance / torso length that is always "off"
     hands_off_margin: float = 0.20     # ...or this much further than at the start
@@ -347,6 +347,8 @@ class BessSession:
         m = None
         if pose.get("detected"):
             m = measure(pose["landmarks"], pose.get("world_landmarks"), w, h, self.cfg.min_visibility)
+            # real distance to each ankle from the iPhone's depth map, when sent
+            m["ankle_depth_m"] = (pose.get("depth") or {}).get("ankles_m")
 
         if self.phase == "countdown":
             self._countdown(t, m, events)
@@ -400,8 +402,8 @@ class BessSession:
         base["toe_y"] = {s: med(lambda f, s=s: f["toe_y"][s]) for s in SIDE}
         fh = [f["foot_height_m"] for f in frames if f["foot_height_m"] is not None]
         base["foot_height_m"] = ({s: median(x[s] for x in fh) for s in SIDE} if fh else None)
-        z = [f["world_ankle_z"] for f in frames if f["world_ankle_z"] is not None]
-        base["ankle_z"] = {s: median(x[s] for x in z) for s in SIDE} if z else None
+        d = [f["ankle_depth_m"] for f in frames if f.get("ankle_depth_m")]
+        base["ankle_depth_m"] = {s: median(x[s] for x in d) for s in SIDE} if d else None
 
         base.update(self._hip_baseline(frames))
 
@@ -482,6 +484,29 @@ class BessSession:
     def _stance_feet(self) -> list[str]:
         return [self.nondominant] if self.stance == "single" else ["left", "right"]
 
+    @staticmethod
+    def _back_foot(base) -> str | None:
+        """Which foot is further from the camera in the start position, or None
+        if it's not clear. Uses the iPhone's depth at each ankle when available;
+        otherwise the image: from a camera above floor level the back foot's
+        lowest point (heel / toe) sits higher in the picture. (MediaPipe's own
+        3D depth of the feet is too unreliable for this, especially in tandem
+        where one foot hides the other.)"""
+        d = base.get("ankle_depth_m")
+        if d and None not in d.values():
+            if abs(d["left"] - d["right"]) < 0.05:
+                return None
+            return max(d, key=d.get)
+        low = {}
+        for s in SIDE:
+            ys = [y for y in (base["heel_y"][s], base["toe_y"][s]) if y is not None]
+            if not ys:
+                return None
+            low[s] = max(ys)
+        if abs(low["left"] - low["right"]) < 0.02 * (base["leg"] or 1.0):
+            return None
+        return min(low, key=low.get)          # higher in the image = further back
+
     def _setup_warnings(self, base) -> list[str]:
         warn = []
         if None in base["wrist_ratio"].values():
@@ -492,8 +517,9 @@ class BessSession:
         if self.stance == "single" and base["foot_height_m"]:
             if base["foot_height_m"][dom] < 0.05:
                 warn.append(f"Expected the {dom} (dominant) foot to be raised.")
-        if self.stance == "tandem" and base["ankle_z"]:
-            if base["ankle_z"][nd] <= base["ankle_z"][dom]:
+        if self.stance == "tandem":
+            back = self._back_foot(base)
+            if back is not None and back != nd:
                 warn.append(f"Expected the {nd} (non-dominant) foot to be in back.")
         if self.stance == "double" and base["ankle"]["left"] is not None and base["ankle"]["right"] is not None:
             gap = np.linalg.norm(base["ankle"]["left"] - base["ankle"]["right"]) / base["leg"]
@@ -630,10 +656,17 @@ class BessSession:
     def session_summary(self) -> dict:
         per = {s: (self.scores[s]["errors"] if s in self.scores else None) for s in STANCES}
         done = [v for v in per.values() if v is not None]
-        return {"scores": per, "total": sum(done), "complete": len(done) == len(STANCES)}
+        return {"scores": per, "total": sum(done), "complete": len(done) == len(STANCES),
+                # per-stance breakdown by error type, and how much of each trial was measured
+                "by_stance": {s: (dict(self.scores[s]["by_type"]) if s in self.scores else None)
+                              for s in STANCES},
+                "coverage": {s: (self.scores[s]["coverage"] if s in self.scores else None)
+                             for s in STANCES},
+                "error_types": list(self.error_types())}
 
     def _status(self, t, events, eyes_open) -> dict:
         out = {"phase": self.phase, "stance": self.stance, "nondominant": self.nondominant,
+               "duration_s": self.cfg.duration_s,      # stance length, for the screens' timers
                "events": events, "session": self.session_summary()}
         if self.phase == "countdown":
             elapsed = t - self._t0 if self._t0 is not None else 0.0

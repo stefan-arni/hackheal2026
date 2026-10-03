@@ -24,6 +24,9 @@ def open_source(source: str):
     if not cap.isOpened():
         raise SystemExit(f"could not open source {source!r} "
                          "(check camera permissions, or try --source 1)")
+    if not source.isdigit():
+        # phone videos store portrait as landscape + a rotation flag; apply it
+        cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
     return cap
 
 

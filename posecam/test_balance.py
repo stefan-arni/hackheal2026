@@ -285,3 +285,41 @@ def test_lifting_during_calibration_restarts_it():
     assert mon.floor is None
     res, _ = feed(mon, [hd()] * 20, t)
     assert res[-1]["floor_calibrated"]
+
+
+def test_feet_state_up_and_down_with_hysteresis():
+    from balance import FeetState
+    fs = FeetState()
+    for _ in range(3):
+        r = fs.update(heights())
+    assert r["state"] == "both_down" and r["left"] == "down"
+    for _ in range(3):
+        r = fs.update(heights(right_lift=0.15))
+    assert r["state"] == "right_up" and r["heights_cm"]["right"] == pytest.approx(15, abs=0.5)
+    for _ in range(3):
+        r = fs.update(heights(right_lift=0.05))         # between 3 and 8 cm: still up
+    assert r["state"] == "right_up"
+    for _ in range(3):
+        r = fs.update(heights())
+    assert r["state"] == "both_down"
+    assert fs.update(None)["state"] == "not_visible"
+
+
+def test_feet_state_reported_even_when_balance_is_paused():
+    from bess import BessConfig
+    lms, world = make_pose(left_lift=0.2)
+
+    class Fake:
+        def process_bgr(self, f):
+            return {"detected": True, "landmarks": lms, "world_landmarks": world}
+
+        def close(self):
+            pass
+
+    pipe = PosePipeline(Fake(), BalanceConfig(), None, BessConfig())
+    pipe.handle_command({"type": "bess_start", "stance": "double"})
+    frame = np.zeros((H, W, 3), np.uint8)
+    for i in range(4):
+        out = pipe.process_bgr(frame, t=i / 15)
+    assert out["balance"]["state"] == "paused"
+    assert out["feet"]["state"] == "left_up"

@@ -130,7 +130,7 @@ class BessPanel:
         elif phase == "running":
             self._text(p, f"{STANCES[active]}", 14, y, 0.6, FG, 2)
             self._text(p, f"{b['time_left']:.1f}s", 200, y, 0.75, ACCENT, 2)
-            frac = 1 - b["time_left"] / 20.0
+            frac = 1 - b["time_left"] / max(b["duration_s"], 1e-6)
             cv2.rectangle(p, (14, y + 10), (PANEL_W - 14, y + 18), (70, 70, 70), -1)
             cv2.rectangle(p, (14, y + 10), (14 + int((PANEL_W - 28) * frac), y + 18), ACCENT, -1)
             y += 46

@@ -49,7 +49,7 @@ def _get(lm, key):
 
 
 def foot_heights(landmarks, world_landmarks, width: int, height: int,
-                 min_visibility: float = 0.5) -> dict | None:
+                 min_visibility: float = 0.3) -> dict | None:
     """Height of each foot above the lower foot. None if feet aren't visible.
 
     Returns {"world": {"left": m, "right": m}, "image": {"left": legs, "right": legs},
@@ -95,7 +95,7 @@ class BalanceConfig:
     touch_threshold: float | None = None   # ...and as down again below this
     lift_hold_s: float = 0.3       # raised this long before the balance timer starts
     smooth_frames: int = 3         # median filter: one noisy frame can't trigger a touch
-    min_visibility: float = 0.5
+    min_visibility: float = 0.3    # dark clothes/shoes score 0.35-0.5 on clearly visible feet
     calibrate: bool = True         # (2) learn the floor while both feet are down
     calibrate_s: float = 1.0       # ...over this long
 
@@ -209,7 +209,9 @@ class BalanceMonitor:
                         self.state = "balancing"
                         self.balance_start = self._lift_since
                         event = "balance_start"
-                elif raised_h < cfg.touch_threshold or self.state == "idle":
+                else:
+                    # a lift only counts while the foot stays above the lift threshold;
+                    # dipping back below it restarts the attempt (no backdated timer)
                     self.state, self.lifted_foot, self._lift_since = "idle", None, None
 
             elif self.state == "balancing":
@@ -307,7 +309,7 @@ def draw_balance(frame, b: dict | None):
 
     state = b["state"]
     if state == "paused":
-        names = {"double": "feet together", "tandem": "tandem"}
+        names = {"double": "feet together", "tandem": "tandem", "sway": "sway"}
         msg = f"Single-leg tracking paused during {names.get(b.get('paused_for'), 'BESS')} test"
         cv2.putText(frame, msg, (15, h - 46), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
         cv2.putText(frame, msg, (15, h - 46), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 180), 1)
@@ -341,3 +343,40 @@ def draw_balance(frame, b: dict | None):
         cv2.rectangle(frame, (x - 10, h // 3 - th - 12), (x + tw + 10, h // 3 + 12), (0, 0, 180), -1)
         cv2.putText(frame, txt, (x, h // 3), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
     return frame
+
+
+class FeetState:
+    """Is each foot down or up, every frame (never paused, unlike BalanceMonitor).
+    Uses the height above the lower foot (3D metres, or 2D leg-lengths without
+    world landmarks), the same lift / touch thresholds as BalanceMonitor, and a
+    short median so a single noisy frame can't flip it."""
+
+    THRESHOLDS = {"world": (0.08, 0.03), "image": (0.10, 0.04)}   # (up above, down below)
+
+    def __init__(self, smooth_frames: int = 3):
+        self._hist = {s: deque(maxlen=smooth_frames) for s in FEET}
+        self.up = {s: False for s in FEET}
+
+    def update(self, heights: dict | None) -> dict:
+        if heights is None:
+            for d in self._hist.values():
+                d.clear()
+            return {"state": "not_visible", "left": None, "right": None, "heights_cm": None}
+        mode = "world" if "world" in heights else "image"
+        lift, touch = self.THRESHOLDS[mode]
+        for s in FEET:
+            self._hist[s].append(heights[mode][s])
+            h = median(self._hist[s])
+            if self.up[s] and h < touch:
+                self.up[s] = False
+            elif not self.up[s] and h >= lift:
+                self.up[s] = True
+        if self.up["left"] and self.up["right"]:      # can't both be above the lower one
+            low = min(FEET, key=lambda s: median(self._hist[s]))
+            self.up[low] = False
+        state = ("left_up" if self.up["left"] else "right_up" if self.up["right"] else "both_down")
+        return {"state": state,
+                "left": "up" if self.up["left"] else "down",
+                "right": "up" if self.up["right"] else "down",
+                "heights_cm": ({s: round(median(self._hist[s]) * 100, 1) for s in FEET}
+                               if mode == "world" else None)}
