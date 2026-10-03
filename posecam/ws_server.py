@@ -26,6 +26,7 @@ import json
 import logging
 import socket
 import threading
+import time
 from typing import Callable
 
 import cv2
@@ -125,13 +126,15 @@ class Connection:
                          "command": meta.get("type")}))
                 continue
             if self.forwarder is not None:  # every received frame (even ones the model drops)
-                self._offer(message, frame, meta)
+                recv_ms = time.time() * 1000
+                self._offer(message, frame, meta, recv_ms)
+                meta = {**meta, "server_recv_ms": recv_ms}  # copy: the analyzer's meta is unchanged otherwise
             if self.latest is not None:
                 self.dropped += 1
             self.latest = (frame, meta)
             self.ready.set()
 
-    def _offer(self, message, frame, meta):
+    def _offer(self, message, frame, meta, recv_ms):
         """Hand the full frame to the forwarder: the JPEG as received, re-encoded only if rotated."""
         try:
             if int(meta.get("rotate", 0)) % 360:
@@ -140,7 +143,7 @@ class Connection:
                 jpeg = bytes(message)
             else:
                 jpeg = base64.b64decode(json.loads(message)["image"])
-            self.forwarder.offer_frame(jpeg, meta.get("timestamp_ms"), (frame.shape[1], frame.shape[0]))
+            self.forwarder.offer_frame(jpeg, meta.get("timestamp_ms"), (frame.shape[1], frame.shape[0]), recv_ms)
         except Exception:
             log.exception("replay forward: could not offer frame")
 
@@ -176,7 +179,7 @@ class Connection:
                     msg.setdefault("client_timestamp_ms", meta.get("timestamp_ms"))
                     await self.ws.send(json.dumps(msg))
                 if self.forwarder is not None and msgs:
-                    self.forwarder.on_messages(msgs, meta.get("timestamp_ms"))
+                    self.forwarder.on_messages(msgs, meta.get("timestamp_ms"), meta.get("server_recv_ms"))
 
 
 def make_handler(analyzer_factory, result_type: str = "result", events_fn: EventsFn | None = None,
