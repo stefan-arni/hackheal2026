@@ -11,6 +11,11 @@ Client -> server:
   - {"type": "frame", "image": "<base64 JPEG>", "frame_id": 42,
      "timestamp_ms": 1696291200000, "rotate": 0}
     `rotate` (0/90/180/270, clockwise) is optional, for frames that arrive sideways.
+    Optional depth map (LiDAR / TrueDepth): "depth", "depth_format", "depth_size",
+    "intrinsics", see depth.py. It's rotated with the image and handed to the
+    analyzer as meta["_depth"] (metres) and meta["_intrinsics"].
+  - {"type": "record_start", "name": "optional"} / {"type": "record_stop"} ->
+    save every incoming message to recordings/<name>.jsonl (replay: playback.py)
   - {"type": "ping"} -> {"type": "pong"}
   - {"type": "recalibrate"} -> calls analyzer.recalibrate() before the next frame
     (only if the analyzer has one)
@@ -56,17 +61,48 @@ def decode_message(message) -> tuple[np.ndarray | None, dict]:
     rot = int(meta.get("rotate", 0)) % 360
     if rot in ROTATIONS:
         frame = cv2.rotate(frame, ROTATIONS[rot])
+    if "depth" in meta:   # LiDAR / TrueDepth map from the iPhone, rotated the same way
+        from depth import decode_depth
+        meta["_depth"], meta["_intrinsics"] = decode_depth(meta, rot)
     return frame, meta
+
+
+class Recorder:
+    """Saves every incoming message (frames incl. depth, and commands) as one JSON
+    line each, so a session can be replayed exactly with playback.py."""
+
+    def __init__(self, directory: str = "recordings", name: str | None = None):
+        import os
+        import time as _time
+        os.makedirs(directory, exist_ok=True)
+        name = name or _time.strftime("%Y%m%d-%H%M%S")
+        safe = "".join(c for c in name if c.isalnum() or c in "-_") or "session"
+        self.path = os.path.join(directory, safe + ".jsonl")
+        self._f = open(self.path, "a")
+        self.messages = 0
+
+    def write(self, message):
+        if isinstance(message, (bytes, bytearray)):
+            message = json.dumps({"type": "frame", "image": base64.b64encode(message).decode("ascii")})
+        self._f.write(message.rstrip("\n") + "\n")
+        self.messages += 1
+
+    def close(self):
+        self._f.close()
 
 
 class Connection:
     """One client stream. Keeps only the newest frame and processes it."""
 
-    def __init__(self, ws, analyzer, result_type: str, events_fn: EventsFn | None = None, forwarder=None,
-                 publisher=None):
+    def __init__(self, ws, analyzer, result_type: str, events_fn: EventsFn | None = None,
+                 record_dir: str | None = None, record_all: bool = False, forwarder=None, publisher=None):
         self.ws = ws
         self.forwarder = forwarder  # optional replay_forward.ReplayForwarder (frames + events)
         self.publisher = publisher  # optional replay_publish.LivePublisher (dashboard summaries + events)
+        self.record_dir = record_dir or "recordings"
+        self.recorder: Recorder | None = Recorder(self.record_dir) if record_all else None
+        if self.recorder:
+            log.info("recording to %s", self.recorder.path)
         self.analyzer = analyzer
         self.result_type = result_type
         self.events_fn = events_fn
@@ -100,8 +136,34 @@ class Connection:
         with self.lock:
             return self.analyzer.handle_command(msg)
 
+    def _record_command(self, meta) -> dict | None:
+        """record_start {name?} / record_stop. Returns the reply, or None."""
+        kind = meta.get("type")
+        if kind == "record_start":
+            if self.recorder is None:
+                self.recorder = Recorder(self.record_dir, meta.get("name"))
+                log.info("recording to %s", self.recorder.path)
+            return {"type": "ack", "command": kind, "recording": True, "file": self.recorder.path}
+        if kind == "record_stop":
+            out = {"type": "ack", "command": kind, "recording": False}
+            if self.recorder is not None:
+                out.update(file=self.recorder.path, messages=self.recorder.messages)
+                log.info("recording stopped: %s (%d messages)", self.recorder.path, self.recorder.messages)
+                self.recorder.close()
+                self.recorder = None
+            return out
+        return None
+
+    def close_recorder(self):
+        if self.recorder is not None:
+            log.info("recording saved: %s (%d messages)", self.recorder.path, self.recorder.messages)
+            self.recorder.close()
+            self.recorder = None
+
     async def receive_loop(self):
         async for message in self.ws:
+            if self.recorder is not None:
+                self.recorder.write(message)
             try:
                 frame, meta = decode_message(message)
             except Exception as e:  # bad payload: tell the client, keep going
@@ -110,6 +172,8 @@ class Connection:
             if frame is None:
                 if meta.get("type") == "ping":
                     await self.ws.send(json.dumps({"type": "pong"}))
+                elif meta.get("type") in ("record_start", "record_stop"):
+                    await self.ws.send(json.dumps(self._record_command(meta)))
                 elif meta.get("type") == "recalibrate":
                     self.recalibrate_pending = True
                     log.info("recalibration requested")
@@ -193,7 +257,8 @@ class Connection:
 
 
 def make_handler(analyzer_factory, result_type: str = "result", events_fn: EventsFn | None = None,
-                 *, forwarder_factory=None, publisher_factory=None):
+                 record_dir: str | None = None, record_all: bool = False, *, forwarder_factory=None,
+                 publisher_factory=None):
     async def handler(ws):
         peer = ws.remote_address
         log.info("client connected: %s (loading model...)", peer)
@@ -205,7 +270,7 @@ def make_handler(analyzer_factory, result_type: str = "result", events_fn: Event
             return
         log.info("model ready for %s", peer)
         forwarder = forwarder_factory() if forwarder_factory else None
-        conn = Connection(ws, analyzer, result_type, events_fn, forwarder=forwarder,
+        conn = Connection(ws, analyzer, result_type, events_fn, record_dir, record_all, forwarder=forwarder,
                           publisher=publisher_factory(forwarder) if publisher_factory else None)
         worker = asyncio.create_task(conn.process_loop())
         try:
@@ -215,6 +280,7 @@ def make_handler(analyzer_factory, result_type: str = "result", events_fn: Event
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+            conn.close_recorder()
             await asyncio.to_thread(conn._close)
             log.info("client %s disconnected (processed=%d dropped=%d)",
                      peer, conn.processed, conn.dropped)
@@ -232,10 +298,11 @@ def lan_ip() -> str:
 
 
 async def serve(host: str, port: int, analyzer_factory, result_type: str = "result",
-                events_fn: EventsFn | None = None, name: str = "server", forwarder_factory=None,
+                events_fn: EventsFn | None = None, name: str = "server",
+                record_dir: str | None = None, record_all: bool = False, forwarder_factory=None,
                 publisher_factory=None):
     async with websockets.serve(make_handler(analyzer_factory, result_type, events_fn,
-                                             forwarder_factory=forwarder_factory,
+                                             record_dir, record_all, forwarder_factory=forwarder_factory,
                                              publisher_factory=publisher_factory),
                                 host, port, max_size=8 * 1024 * 1024):
         log.info("%s listening on ws://%s:%d  (iPhone: ws://%s:%d)",

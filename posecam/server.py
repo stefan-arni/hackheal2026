@@ -13,6 +13,10 @@ Frame/ping protocol: see ws_server.py. Also:
   {"type": "bess_start", "stance": "double" | "tandem" | "single", "nondominant": "left"}
   {"type": "bess_cancel"} / {"type": "bess_reset"} / {"type": "bess_status"}
   {"type": "bess_mark", "error": "hands_off_hips"}  (manual error during a test)
+  {"type": "sway_start", "test": "quiet" | "tandem" | "romberg_eo" | "romberg_ec", "duration": 30}
+  {"type": "sway_cancel"} / {"type": "sway_reset"} / {"type": "sway_status"}
+  {"type": "record_start", "name": "optional"} / {"type": "record_stop"}  (save the session)
+  Frames may carry a LiDAR / TrueDepth depth map (see depth.py) for sway in real cm.
 
 Reply, one per processed frame:
   {"type": "pose", "frame_id": 42, "client_timestamp_ms": ..., "detected": true,
@@ -77,11 +81,19 @@ def main():
                    help="feet out of frame: nose drop that counts as a duck, in shoulder-widths "
                         "(default 0.8)")
     p.add_argument("--no-bess", action="store_true", help="turn off the BESS balance test")
-    p.add_argument("--bess-eyes", choices=["off", "auto", "manual"], default="off",
-                   help="BESS eyes-open errors: off (default) = not tracked, auto = face check, "
-                        "manual = marked from the app")
-    p.add_argument("--bess-countdown", type=float, default=5.0,
-                   help="seconds to get into position after pressing a test button")
+    p.add_argument("--bess-eyes", choices=["off", "auto", "manual"], default="manual",
+                   help="BESS eyes-open errors: manual (default) = the examiner marks them in the "
+                        "app, auto = face check (unreliable at full-body distance), off = not scored")
+    p.add_argument("--bess-countdown", type=float, default=1.0,
+                   help="seconds before scoring starts; the last second records the start "
+                        "position (default 1, i.e. no get-ready countdown)")
+    p.add_argument("--no-sway", action="store_true",
+                   help="turn off the sway tests (quiet stance, tandem, Romberg)")
+    p.add_argument("--sway-duration", type=float, default=30.0,
+                   help="default length of a sway test in seconds (the app can override)")
+    p.add_argument("--record", action="store_true",
+                   help="save every session to --record-dir (the app can also start/stop it)")
+    p.add_argument("--record-dir", default="recordings", help="where recordings go")
     p.add_argument("--replay-url", default=None,
                    help="forward BESS frames + events to the replay service (e.g. http://localhost:8017)")
     p.add_argument("--patient-height-cm", type=float, default=None, help="sent to replay with each trial")
@@ -95,7 +107,8 @@ def main():
     from balance import BalanceConfig
     from bess import BessConfig
     from duck import DuckConfig
-    balance_cfg = duck_cfg = bess_cfg = None
+    from sway import SwayConfig
+    balance_cfg = duck_cfg = bess_cfg = sway_cfg = None
     if not args.no_balance:
         try:
             balance_cfg = BalanceConfig(mode=args.balance_mode, lift_threshold=args.lift_threshold,
@@ -114,6 +127,9 @@ def main():
     if not args.no_bess:
         bess_cfg = BessConfig(countdown_s=args.bess_countdown, duration_s=args.bess_duration)
         log.info("BESS on (eyes: %s)", args.bess_eyes)
+    if not args.no_sway:
+        sway_cfg = SwayConfig(duration_s=args.sway_duration)
+        log.info("sway tests on (%.0f s; quiet, tandem, romberg_eo, romberg_ec)", sway_cfg.duration_s)
 
     from pose_analyzer import PoseAnalyzer, ensure_model
     from pose_pipeline import PosePipeline, pose_events
@@ -124,14 +140,15 @@ def main():
 
     def factory():
         pose = PoseAnalyzer(model=args.model, min_visibility=args.min_visibility)
-        if balance_cfg is None and duck_cfg is None and bess_cfg is None:
+        if balance_cfg is None and duck_cfg is None and bess_cfg is None and sway_cfg is None:
             return pose
         # fresh config objects per connection, so each client has its own state
         return PosePipeline(pose,
                             BalanceConfig(**vars(balance_cfg)) if balance_cfg else None,
                             DuckConfig(**vars(duck_cfg)) if duck_cfg else None,
                             BessConfig(**vars(bess_cfg)) if bess_cfg else None,
-                            bess_eyes=args.bess_eyes)
+                            bess_eyes=args.bess_eyes,
+                            sway=SwayConfig(**vars(sway_cfg)) if sway_cfg else None)
 
     forwarder_factory = None
     if args.replay_url:
@@ -150,7 +167,8 @@ def main():
     try:
         asyncio.run(serve(args.host, args.port, factory, result_type="pose",
                           events_fn=pose_events, name="pose server", forwarder_factory=forwarder_factory,
-                          publisher_factory=publisher_factory))
+                          publisher_factory=publisher_factory,
+                          record_dir=args.record_dir, record_all=args.record))
     except KeyboardInterrupt:
         pass
 

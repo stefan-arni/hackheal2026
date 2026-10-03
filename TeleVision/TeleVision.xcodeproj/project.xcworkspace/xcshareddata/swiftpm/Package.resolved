@@ -1,0 +1,24 @@
+{
+  "originHash" : "438c7d8e0601636d81e9f7bc644a9e1eaae4744e37e20c035754dbfabb9201c2",
+  "pins" : [
+    {
+      "identity" : "mediapipe",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/google-ai-edge/mediapipe.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "0ee0eea2250d92465e242bdc2638548f837d1976"
+      }
+    },
+    {
+      "identity" : "webrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stasel/WebRTC.git",
+      "state" : {
+        "branch" : "latest",
+        "revision" : "979c8867b62eaae6bc5b799d838a71f5296af8b2"
+      }
+    }
+  ],
+  "version" : 3
+}

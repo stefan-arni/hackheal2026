@@ -6,10 +6,10 @@ and spine angle on screen, plus single-leg balance: stand on one foot and the
 window times it, then flashes and beeps when the raised foot touches down.
 Duck down quickly and it quacks.
 
-BESS balance test: a side panel has a button for each of the three 20-second
-stances (feet together, tandem, single leg) and shows the error score per stance
-and in total. Click a button (or press 1 / 2 / 3), get into position during the
-countdown, hold for 20 s.
+BESS balance test: a side panel has a button for each of the three stances
+(feet together, tandem, single leg; 10 s each by default, see BessConfig.duration_s)
+and shows the error score per stance and in total. Click a button (or press
+1 / 2 / 3), get into position during the countdown, hold until the timer ends.
 
 Usage:
     python server.py                         # terminal 1
@@ -151,7 +151,7 @@ def announce_bess(b: dict | None):
             print(f">> BESS {STANCES[ev['stance']]}: get in position, hands on hips "
                   f"(non-dominant: {ev['nondominant']})")
         elif k == "bess_running":
-            print(">> BESS: 20 s started")
+            print(">> BESS: scoring started")
             for w in ev.get("warnings", []):
                 print(f"   warning: {w}")
         elif k == "bess_error":

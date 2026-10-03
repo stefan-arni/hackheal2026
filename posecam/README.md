@@ -6,12 +6,33 @@ uses your webcam in place of the iPhone.
 
 | | Server | Laptop client | Port | What it does |
 |---|---|---|---|---|
-| **Pose** | `server.py` | `test_client.py` | 8765 | Full-body landmarks, spine angle, single-leg balance, BESS balance test, duck → quack |
+| **Pose** | `server.py` | `test_client.py` | 8765 | Full-body landmarks, spine angle, single-leg balance, BESS balance test, sway tests (quiet / tandem / Romberg, with iPhone LiDAR depth), duck → quack |
 | **Eyes** | `eye_server.py` | `eye_client.py` | 8766 | Iris tracking: drift alerts, saccade speed, smoothness (close-up camera) |
 
-They share only `ws_server.py` / `ws_client.py` (frame decoding and connection
-handling). Pose code lives in `pose_analyzer.py`, `balance.py`, `bess.py`, `duck.py` and
-`pose_pipeline.py` (which runs them together); eye code in `eye_tracker.py`.
+They share only `ws_server.py` / `ws_client.py` (frame decoding, connection handling,
+session recording). Pose code lives in `pose_analyzer.py`, `balance.py`, `bess.py`,
+`sway.py`, `depth.py`, `duck.py` and `pose_pipeline.py` (which runs them together); eye
+code in `eye_tracker.py`. `playback.py` replays recorded sessions and video files.
+
+## Quick start: BESS with the doctor's dashboard
+
+```bash
+cd posecam && source .venv/bin/activate
+python start.py
+```
+
+`start.py` starts the pose server (`server.py`, port 8765: MediaPipe pose, LiDAR depth,
+BESS scoring) and the call server (`doctor_call_server.py`, port 8088: video call and
+dashboard), prints the IP to type into the TeleVision app, and opens the doctor page
+(http://localhost:8088). Ctrl+C stops both.
+
+The doctor page joins the room by itself and reconnects if the connection drops. Once
+the patient joins from the TeleVision app (same room), it calls them and starts the
+phone's balance stream automatically. The strip at the top shows each link (server,
+video call, phone → pose server with frames per second, MediaPipe pose, LiDAR depth),
+and the MediaPipe skeleton is drawn over the patient's video. Click a stance (Feet
+together, Tandem, Single leg) to run it; the dashboard shows the live timer, errors and
+the per-stance results.
 
 ## Setup
 
@@ -22,6 +43,19 @@ pip install -r requirements.txt
 ```
 
 MediaPipe models download into `models/` the first time each server starts.
+
+**macOS:**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+SYSTEM_VERSION_COMPAT=0 pip install -r requirements.txt
+```
+
+`SYSTEM_VERSION_COMPAT=0` matters on Intel Macs with an older Python build (e.g.
+Anaconda's): that Python reports macOS as "10.16", so pip rejects mediapipe's
+macOS 11+ wheels and says "No matching distribution found for mediapipe". The newest
+mediapipe with Intel-Mac wheels is 0.10.21, which pip then picks.
 
 ## Run
 
@@ -44,18 +78,22 @@ The iPhone screen with the three test buttons is `ios/BessTestView.swift`.
 | Command | What it does |
 |---|---|
 | `python test_client.py --local` / `python eye_client.py --local` | Run MediaPipe directly, no server |
-| `--source clip.mp4` | Video file instead of the webcam (`--source 1` for a second camera) |
+| `--source clip.mp4` | Video file instead of the webcam (`--source 1` for a second camera); iPhone portrait videos are rotated upright automatically |
 | `--source me.jpg` | One image; prints the JSON result |
 | `--json` | Send base64 JSON instead of binary (test both iOS formats) |
 | `--log out.csv` | Save per-frame values |
 | `python server.py --model lite` | Faster pose model; `heavy` is more accurate |
 | `python server.py --no-balance` / `--no-duck` / `--no-bess` | Turn off balance, duck or BESS |
-| `python server.py --bess-eyes auto` | BESS: turn eye tracking back on (off by default) |
+| `python server.py --bess-eyes auto` | BESS: check eyes with the face model (default `manual`: the examiner marks "Eyes opened" in the app; `off`: not scored) |
 | `python test_client.py --bess tandem` | Start a BESS test right away (`double`, `tandem`, `single`) |
 | `python test_client.py --nondominant right` | BESS non-dominant leg (default left; **n** toggles) |
 | `python test_client.py --mute` | No quack sound |
 | `python quack.py` | Just play the quack (`sounds/quack.wav`) |
 | `python eye_server.py --threshold 0.08` | More sensitive eye alerts (see tuning) |
+| `python server.py --record` | Save every session to `recordings/` (the app's Record button does it on demand) |
+| `python server.py --no-sway` / `--sway-duration 20` | Turn off sway tests / change their default length |
+| `python playback.py recordings/x.jsonl` | Replay a recorded iPhone session (incl. depth) through the same pipeline |
+| `python playback.py clip.mov --test quiet@0:20` | Run a sway test on a video file (test at 0 s, 20 s long) |
 | `pytest -q` | All tests (no models needed) |
 
 Windows: allow camera access under Settings → Privacy & security → Camera → "Let
@@ -88,7 +126,10 @@ moment the raised foot touches the ground.
    touch count and best time until you press **r** (or send `{"type":"recalibrate"}`).
 
 How it works: each foot's lowest point (ankle, heel or toe) is found and its height
-above the floor is measured. The "foot down" level is lower than the "foot up" level,
+above the floor is measured. Feet count as visible down to a MediaPipe visibility of
+0.3: dark trousers and shoes give clearly visible feet scores of only 0.35-0.5. A lift
+only counts while the foot stays above the lift level; dipping back below it restarts
+the attempt, so the timer is never backdated. The "foot down" level is lower than the "foot up" level,
 so a foot hovering just above the floor doesn't flicker on and off, and a single
 noisy frame can't trigger a touchdown.
 
@@ -114,9 +155,12 @@ camera at hip height a few meters away. If the feet can't be seen (`skip_reason:
 
 ## Pose: BESS balance test
 
-The Balance Error Scoring System on a firm surface: three 20-second stances, hands on
-hips. The score is the number of errors, per stance and in total. **Eye tracking is
-off for now**: eyes aren't checked or scored (see "Eyes" below).
+The Balance Error Scoring System on a firm surface: three stances, hands on hips, eyes
+closed. Each stance lasts `BessConfig.duration_s` (bess.py), **10 seconds** by default;
+the standard BESS uses 20 s, so scores aren't directly comparable to published 20-s
+norms. The length is sent in every BESS status as `duration_s`, and the app, the laptop
+window and the doctor page use that for their timers. The score is the number of errors, per stance and in total.
+"Eyes opened" is marked by the examiner in the app (see "Eyes" below).
 
 | Button | Stance |
 |---|---|
@@ -124,10 +168,11 @@ off for now**: eyes aren't checked or scored (see "Eyes" below).
 | **Tandem** (`tandem`) | one foot in front of the other, **non-dominant foot in back** |
 | **Single leg** (`single`) | standing on the **non-dominant** leg |
 
-**Running a test:** pick the non-dominant leg, press a stance button, and get into
-position during the 5-second countdown. The last second of the countdown records the
-person's own start position, so scoring is relative to how they actually stand. Then
-20 seconds of scoring, and the result. Re-running a stance replaces its score;
+**Running a test:** pick the non-dominant leg, get the person into position, and press
+a stance button. The first second records the person's own start position (no get-ready
+countdown; `--bess-countdown` sets it), so scoring is relative to how they actually
+stand. Then
+the stance's scoring time (`duration_s`), and the result. Re-running a stance replaces its score;
 **Reset scores** clears all three.
 
 **One point per error, one rule per error type**, each counted once per distinct
@@ -174,16 +219,96 @@ meters away. A side or 45° view makes the hip angle and steps easier to see. If
 start position can't be seen for 10 s after the countdown, the test is called off
 with a message.
 
-**Eyes (off for now):** by default eyes aren't tracked, the face model isn't loaded,
-and "Eyes opened" isn't an error type. The code is still there: `--bess-eyes auto`
-checks eyes with the face model on an enlarged crop of the head, and `--bess-eyes
-manual` lets the app send `{"type":"bess_mark","error":"eyes_open"}`.
+**Eyes:** at full-body distance the camera can't reliably see whether the eyes are
+open, so by default (`--bess-eyes manual`) "Eyes opened" is an error type that the
+examiner marks with the app's **Eyes opened +1** button
+(`{"type":"bess_mark","error":"eyes_open"}`). `--bess-eyes auto` checks eyes with the
+face model on an enlarged crop of the head instead; `--bess-eyes off` leaves eyes out.
+
+Sway (centre-of-mass velocity and area, as in the sway tests) is also measured during
+each stance: live as `bess.sway_cm`, and per stance as `sway` in `bess_done` and in the
+session summary. The session summary also has `by_stance` (errors by type for each
+stance) and `coverage`.
 
 Not automated: the standard BESS rule that a person who can't hold the stance for at
 least 5 s scores 10 for that stance. The examiner should apply that by hand.
 
 This is a demo aid, not a validated clinical scoring tool. Compare it against a
 trained examiner before relying on it.
+
+## Pose: sway tests (quiet stance, tandem, Romberg)
+
+Postural sway, measured from the camera, for four 30-second tests (length set per
+test from the app, or `--sway-duration`):
+
+| Test (`test`) | Stance |
+|---|---|
+| **Quiet stance** (`quiet`) | feet hip-width apart, arms at sides, eyes open |
+| **Tandem stance** (`tandem`) | one foot directly in front of the other, heel to toe |
+| **Romberg, eyes open** (`romberg_eo`) | feet together, arms at sides |
+| **Romberg, eyes closed** (`romberg_ec`) | same, eyes closed when the countdown ends |
+
+Like BESS: a 5-second countdown to get into position (its last second records the
+start position), then the recording. Single-leg tracking is paused during a test, and
+BESS and sway tests can't run at the same time.
+
+**What's measured.** Body sway is the movement of an approximate centre of mass, a
+point between the hip midpoint and the shoulder midpoint (65% of the way to the hips),
+with the person facing the camera:
+
+| Result | Meaning |
+|---|---|
+| `mean_velocity_cm_s` | sway velocity: path length ÷ time (also `ml_` side-to-side and `ap_` front-back) |
+| `path_length_cm` | total distance the centre of mass travelled |
+| `area_95_cm2` | sway area: the 95% confidence ellipse |
+| `rms_ml_cm`, `rms_ap_cm`, `range_*` | size of the sway in each direction |
+| `directional` | directional instability: biggest drift from the start position forward / back / left / right (the person's own left and right), main sway axis (`main_axis_deg`, 0 = side-to-side, 90 = front-back), and `dominant` direction (one axis's RMS 1.5× the other's) |
+| `trunk_lean` | sideways trunk lean vs the start posture: max to each side, and how often and how long it went past `lean_limit_deg` (default 10°, set per test). Crossing it sends a live `sway_lean` alert. |
+| `errors`, `by_type`, `log` | BESS-style error points (see below) |
+| `trail` | the centre-of-mass path at 10 Hz (`[t, ml_cm, ap_cm]`), for plotting |
+
+**Errors (points, lower is better).** The trial runs its full length; every balance
+error is one point, scored like BESS: each counts once per event (it has to clear
+before it can count again), errors starting within 0.5 s of each other count once,
+and a trial scores at most 10.
+
+| Error | Rule |
+|---|---|
+| Step / stumble | an ankle moves 0.15 leg-lengths from where the feet last settled (left/right label swaps by the model don't count). Putting a lifted foot back into the starting stance isn't another step. |
+| Trunk lean past limit | sideways lean past `lean_limit` (default 10°) for 0.3 s |
+| Swayed too far | centre of mass more than `drift_limit` (default 10 cm) from the start for 0.2 s |
+| Out of position > 5 s | any of the above held for more than 5 s (including feet staying out of the stance) |
+
+The session keeps a score table (`scores`, `total_errors`), like BESS. Live, each pose
+result's `sway` has `errors`, `active` and `log`, and each error is also sent as
+`{"type": "event", "kind": "sway_error", "error": "step", "label": "Step / stumble", "t": 4.2, "counted": true, "errors": 1}`.
+The app's Balance tab works like the BESS screen: a button per test, the live countdown,
+timer and "Errors: N" with a "+1" log (the phone vibrates on each point), and the score
+table. The detailed sway measurements are in the server log and the `sway_done` result.
+
+After both Romberg tests the session reports eyes-closed ÷ eyes-open ratios for
+velocity, path and area (`romberg`), and `positive` if balance was lost with eyes
+closed only.
+
+**Depth vs 2D.** The front-back direction is movement toward the camera, which a
+plain video can't measure. With the iPhone app streaming **LiDAR** depth (back camera,
+iPhone 12 Pro and later Pro models), the torso's distance is read from the depth map
+(median over a grid inside the shoulder-hip area), so sway is in real centimetres in
+both directions (`"mode": "depth"`). Without depth (`"mode": "2d"`, e.g. a video file),
+only side-to-side sway is measured, converted to cm with MediaPipe's metric skeleton;
+front-back values, sway area and the direction ratio are `null`. **TrueDepth** (front
+camera) works the same way but is only accurate within about 1 m, too close for a
+full-body view, so the back camera is the one to use.
+
+Before velocities, the track is resampled to a fixed rate and lightly smoothed (0.2 s
+zero-phase moving average) so landmark jitter doesn't count as sway. Sway velocity is
+still sensitive to camera noise: compare results recorded the same way (same camera,
+distance and light), not against force-plate norms.
+
+**Setup:** camera fixed (tripod or propped up) at about hip height, 2-3 m away, the
+whole body including the feet in frame, the person facing it.
+
+This is a demo aid, not a validated clinical measurement.
 
 ## Pose: duck → quack
 
@@ -289,6 +414,18 @@ Same input format for both servers. Connect to `ws://<laptop-LAN-IP>:8765` (pose
 - Eye server tests: `{"type":"eye_test_start","mode":"saccades"|"pursuit","duration":10}`,
   `{"type":"eye_test_cancel"}`, `{"type":"eye_test_status"}` → immediate `ack` or `error`.
   For eye speeds, send frames as JSON with `"timestamp_ms"` = capture time.
+- **Depth** (optional, iPhone app): add to the JSON frame `"depth"` (base64), `"depth_format"`
+  (`"uint16_mm"` little-endian millimetres, or `"float16_m"`), `"depth_size": [w, h]`,
+  `"intrinsics": [fx, fy, cx, cy]` (in depth-map pixels) and `"camera": "lidar"|"truedepth"`.
+  The depth map must cover the same view as the image; it's rotated with `rotate`. Each
+  pose result then has `"depth": {"camera": "lidar", "torso_m": [x, y, z], "valid_points": 81, ...}`
+  (`torso_m` null if the body couldn't be found in it). See `depth.py`.
+- Recording: `{"type":"record_start","name":"optional"}` / `{"type":"record_stop"}` save every
+  incoming message to `recordings/<name>.jsonl` on the laptop (ack has `"file"`). Replay
+  with `python playback.py recordings/<name>.jsonl`.
+- Pose server, sway tests: `{"type":"sway_start","test":"quiet"|"tandem"|"romberg_eo"|"romberg_ec","duration":30,"lean_limit":10,"drift_limit":10}`,
+  `{"type":"sway_cancel"}`, `{"type":"sway_reset"}`, `{"type":"sway_status"}` → `ack` with
+  `"results"` (latest per test), `"scores"`, `"total_errors"`, `"complete"` and `"romberg"`, or `error`.
 - Pose server, BESS: `{"type":"bess_start","stance":"double"|"tandem"|"single","nondominant":"left"|"right"}`,
   `{"type":"bess_cancel"}`, `{"type":"bess_reset"}`, `{"type":"bess_status"}`,
   `{"type":"bess_mark","error":"hands_off_hips"}` (manual error). Each gets an immediate
@@ -323,7 +460,7 @@ Each pose result also has `"duck": {"ducking": false, "count": 3, "drop": 0.04,
 "threshold": 0.2, "mode": "world"}`, and `"bess"`:
 
 ```json
-"bess": {"phase": "running", "stance": "tandem", "nondominant": "left", "time_left": 12.4,
+"bess": {"phase": "running", "stance": "tandem", "nondominant": "left", "duration_s": 10.0, "time_left": 6.4,
          "errors": 2, "by_type": {"hands_off_hips": 1, "step_stumble_fall": 1, "...": 0},
          "active": ["hands_off_hips"], "warnings": [],
          "log": [{"error": "hands_off_hips", "label": "Hands off hips", "t": 4.9, "counted": true}],
@@ -347,6 +484,22 @@ BESS messages, sent as they happen:
 
 `coverage` is the share of frames where the body could be measured. A low value means
 the score may be missing errors.
+
+Each pose result also has `"sway"`: `{"phase": "running", "test": "quiet", "mode": "depth",
+"time_left": 12.4, "ml_cm": 0.8, "ap_cm": -1.2, "lean_deg": 3.1, "lean_over_limit": false, ...}`.
+Sway messages:
+
+```json
+{"type": "status", "kind": "sway_started", "test": "quiet", "label": "Quiet stance", "instructions": "...", "countdown_s": 5, "duration_s": 30}
+{"type": "status", "kind": "sway_running", "test": "quiet", "mode": "depth", "warnings": []}
+{"type": "alert", "kind": "sway_lean", "event": "start", "side": "left", "lean_deg": 12.4, "limit_deg": 10, "t": 7.2}
+{"type": "result", "kind": "sway_done", "test": "quiet", "mode": "depth", "lost_balance": false,
+ "coverage": 0.99, "metrics": {"mean_velocity_cm_s": 1.2, "path_length_cm": 36.1, "area_95_cm2": 4.3,
+ "rms_ml_cm": 0.4, "rms_ap_cm": 0.6, "directional": {"dominant": "front-back", "largest_drift": "forward", ...}, ...},
+ "trunk_lean": {"left_deg": 4.1, "right_deg": 3.2, "times_over_limit": 0, ...},
+ "session": {"results": {...}, "romberg": {...}}}
+{"type": "status", "kind": "sway_failed", "reason": "..."}
+```
 
 **Eye server** replies once per processed frame:
 
@@ -394,11 +547,41 @@ Landmark `x`/`y` are normalized 0–1 to the received image. If a server is busy
 frames are dropped and only the newest is processed, so the feed stays live. For pose,
 ~640 px wide is plenty; for eyes, send ~960 px or more.
 
-**iPhone screen:** `ios/BessTestView.swift` is a SwiftUI view (iOS 16+) with the
-three test buttons, a non-dominant-leg picker, the live countdown, timer and errors,
-and the score table. It includes `PosecamClient`, a
-small WebSocket client; call `posecam.sendFrame(jpegData)` from your camera code to
-stream frames to the same connection.
+## iPhone app
+
+`ios/` is a complete SwiftUI app (iOS 17+) for the Modified BESS test: live video
+with the skeleton, the three test steps, live errors with an "Eyes opened +1" button,
+a summary with reference-range bars, and the error-by-stance parameter table. It
+streams the back camera with LiDAR depth to the pose server.
+
+| File | What it is |
+|---|---|
+| `PosecamApp.swift` | app entry point (wires camera frames to the server connection) |
+| `DepthCamera.swift` | video + depth capture (LiDAR), the camera preview and skeleton overlay |
+| `BessTestView.swift` | `PosecamClient` (WebSocket) and the BESS screen |
+
+The sway tests (quiet, tandem, Romberg) are still on the server, without an app screen.
+
+**Build it** (Xcode 26, a real iPhone; the simulator has no depth camera). The project
+is ready: `ios/Posecam.xcodeproj` (camera / local-network permissions, portrait only,
+iOS 17+ already set).
+
+1. Open `ios/Posecam.xcodeproj` in Xcode.
+2. Click **Posecam** (top of the file list) → target **Posecam** → **Signing &
+   Capabilities** → Team: your Apple ID (Add an Account... if none; a free one works).
+   If it says the bundle identifier is taken, change `edu.northeastern.posecam` to
+   something unique.
+3. Plug in the iPhone (unlock it, tap Trust). On the phone turn on Settings → Privacy &
+   Security → **Developer Mode** (it restarts).
+4. Choose the iPhone at the top of the Xcode window, press **Run** (▶).
+5. First launch only: on the phone, Settings → General → VPN & Device Management → trust
+   your Apple ID. Allow camera and local network when the app asks.
+
+**Use it:** on the laptop `python server.py` (it prints the address to type, e.g.
+`ws://10.0.5.250:8765`); phone and laptop on the same Wi-Fi. In the app: type the
+laptop IP, Connect, Start Camera, prop the phone up 2-3 m away (back camera facing
+you), check the green skeleton covers you and the badge says "depth ✓", then tap a
+test. **Record** saves the session on the laptop for `playback.py`.
 
 iOS notes: plain `ws://` to a LAN IP needs an App Transport Security exception
 (`NSAllowsLocalNetworking`) plus `NSLocalNetworkUsageDescription` in Info.plist.
