@@ -1444,20 +1444,12 @@ final class CameraManager:
                             distanceCM
                         )
 
-                } else if !personDetected {
-
-                    self.status =
-                        "Waiting for face"
-
-                } else if !thumbDetected {
-
-                    self.status =
-                        "Face detected • waiting for thumb"
-
                 } else {
 
+                    // Say why there's no number instead of guessing.
                     self.status =
-                        "Face + thumb detected • waiting for LiDAR"
+                        "Not measurable: "
+                        + (self.poseDetector.notMeasurableReason ?? "waiting")
                 }
             }
         }

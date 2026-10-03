@@ -45,6 +45,13 @@ nonisolated final class PoseDetector:
     static let rightShoulderIndex = 12
 
     // =========================================================
+    // VISIBILITY
+    // =========================================================
+
+    // Points below this visibility count as "not visible".
+    static let minVisibility: Float = 0.5
+
+    // =========================================================
     // DEPTH TIMING
     // =========================================================
 
@@ -91,134 +98,53 @@ nonisolated final class PoseDetector:
         ((Double?, Bool, Bool) -> Void)?
 
     // =========================================================
-    // TRUE 3D NOSE-BRIDGE -> THUMB DISTANCE
+    // WHY THERE IS NO MEASUREMENT (nil = measurable)
     // =========================================================
 
+    // Checked in order; the first problem found is the reason.
+    var notMeasurableReason: String? {
+        guard personDetected,
+              let nose, nose.visibility >= Self.minVisibility,
+              let bridge, bridge.visibility >= Self.minVisibility
+        else { return "face not clearly visible" }
+        guard isProfile else { return "turn side-on to the camera" }
+        guard thumb != nil else { return "thumb not visible" }
+        guard bridgeFront != nil, bridgeDepthCM != nil else { return "no depth at the nose bridge" }
+        guard fieldOfView > 0, imageSize.width > 0, imageSize.height > 0 else { return "camera not ready" }
+        return nil
+    }
+
+    // =========================================================
+    // NOSE-BRIDGE -> THUMB DISTANCE (bridge-plane method)
+    // =========================================================
+    //
+    // Side-on view: the bridge and the thumb are both on the patient's midline, about
+    // the same distance from the phone. So we measure in the bridge's plane:
+    //   distance = pixel distance x bridge depth / focal length
+    // The thumb tip's own depth is NOT used: a thin, moving fingertip often reads the
+    // wall behind it (NoseThumb test: thumb 112 cm vs nose 67 cm -> "45.9 cm").
+
     var bridgeThumbCM: Double? {
+        guard notMeasurableReason == nil,
+              let bridgeFront, let thumb, let bridgeDepthCM
+        else { return nil }
 
-        guard
-            let bridgePoint = bridgeFront ?? bridge,
-            let thumb,
-            let bridgeDepthCM,
-            let thumbDepthCM,
-            fieldOfView > 0,
-            imageSize.width > 0,
-            imageSize.height > 0
-        else {
-            return nil
-        }
+        let width = Double(imageSize.width)
+        let height = Double(imageSize.height)
+        let fovRadians = Double(fieldOfView) * .pi / 180.0
 
-        let width =
-            Double(imageSize.width)
+        // Focal length in pixels: half the long side divided by tan(half the field of view).
+        let focalPixels = max(width, height) / (2.0 * tan(fovRadians / 2.0))
+        guard focalPixels.isFinite, focalPixels > 0 else { return nil }
 
-        let height =
-            Double(imageSize.height)
+        // Distance between the two points in image pixels.
+        let dx = (Double(thumb.x) - Double(bridgeFront.x)) * width
+        let dy = (Double(thumb.y) - Double(bridgeFront.y)) * height
+        let pixelDistance = (dx * dx + dy * dy).squareRoot()
 
-        let fovRadians =
-            Double(fieldOfView)
-            * .pi
-            / 180.0
-
-        let focalPixels =
-            max(width, height)
-            /
-            (
-                2.0
-                * tan(
-                    fovRadians / 2.0
-                )
-            )
-
-        guard
-            focalPixels.isFinite,
-            focalPixels > 0
-        else {
-            return nil
-        }
-
-        let cx =
-            width / 2.0
-
-        let cy =
-            height / 2.0
-
-        // -----------------------------------------------------
-        // NOSE BRIDGE 3D POSITION
-        // -----------------------------------------------------
-
-        let bridgeU =
-            Double(bridgePoint.x)
-            * width
-
-        let bridgeV =
-            Double(bridgePoint.y)
-            * height
-
-        let bridgeZ =
-            bridgeDepthCM
-
-        let bridgeX =
-            (bridgeU - cx)
-            * bridgeZ
-            / focalPixels
-
-        let bridgeY =
-            (bridgeV - cy)
-            * bridgeZ
-            / focalPixels
-
-        // -----------------------------------------------------
-        // THUMB 3D POSITION
-        // -----------------------------------------------------
-
-        let thumbU =
-            Double(thumb.x)
-            * width
-
-        let thumbV =
-            Double(thumb.y)
-            * height
-
-        let thumbZ =
-            thumbDepthCM
-
-        let thumbX =
-            (thumbU - cx)
-            * thumbZ
-            / focalPixels
-
-        let thumbY =
-            (thumbV - cy)
-            * thumbZ
-            / focalPixels
-
-        // -----------------------------------------------------
-        // EUCLIDEAN 3D DISTANCE
-        // -----------------------------------------------------
-
-        let dx =
-            thumbX - bridgeX
-
-        let dy =
-            thumbY - bridgeY
-
-        let dz =
-            thumbZ - bridgeZ
-
-        let distance =
-            sqrt(
-                dx * dx
-                + dy * dy
-                + dz * dz
-            )
-
-        guard
-            distance.isFinite,
-            distance > 0
-        else {
-            return nil
-        }
-
+        // At the bridge's depth, one pixel covers (depth / focal length) cm.
+        let distance = pixelDistance * bridgeDepthCM / focalPixels
+        guard distance.isFinite, distance > 0 else { return nil }
         return distance
     }
 
@@ -903,29 +829,11 @@ nonisolated final class PoseDetector:
 
                 } else {
 
-                    bridgeFront =
-                        bridge
-
-                    if let meters =
-                        Self.depthMeters(
-                            at:
-                                bridge,
-                            in:
-                                depth,
-                            radius:
-                                3,
-                            percentile:
-                                0.25
-                        )
-                    {
-
-                        measuredBridge =
-                            Double(meters)
-                            * 100.0
-                    }
-
+                    // No raw eye-corner-midpoint fallback: in profile that point is
+                    // 1-2 cm inside the face, which overreads every distance. Leave
+                    // bridgeFront nil so the measurement shows "not measurable".
                     bridgeStatus =
-                        "Bridge fallback: \(reason)"
+                        "Bridge not found: \(reason)"
                 }
             }
         }
