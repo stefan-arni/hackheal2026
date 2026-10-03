@@ -15,17 +15,30 @@ import argparse
 import asyncio
 import io
 import json
+import mimetypes
+import statistics
 import sys
 import time
 from pathlib import Path
 
+import trimesh
 from PIL import Image
 
 REPLAY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPLAY_ROOT))
 
-from service.fal_client_wrap import SamBodyClient  # noqa: E402
-from service.runs import write_frame, write_summary  # noqa: E402
+from service.fal_client_wrap import SamBodyClient, SamResult  # noqa: E402
+
+
+def vis_extension(res: SamResult) -> str:
+    vis = res.response.get("visualization") or {}
+    ext = mimetypes.guess_extension(vis.get("content_type") or "") or Path(vis.get("url", "")).suffix
+    return ext or ".png"
+
+
+def mesh_counts(ply: bytes) -> tuple[int, int]:
+    mesh = trimesh.load(io.BytesIO(ply), file_type="ply", process=False)
+    return len(mesh.vertices), len(mesh.faces)
 
 
 async def process_frame(
@@ -35,16 +48,27 @@ async def process_frame(
     with Image.open(io.BytesIO(jpeg)) as im:
         size = list(im.size)
     res = await sam.reconstruct(jpeg, mask.read_bytes() if mask else None)
-    return write_frame(
-        out,
-        frame.stem,
-        t_ms=t_ms,
-        image_size=size,
-        response=res.response,
-        latency_s=res.latency_s,
-        ply=res.ply,
-        visualization=res.visualization,
-    )
+
+    record = {
+        "frame": frame.name,
+        "t_ms": t_ms,
+        "image_size": size,  # [W, H] of the image sent to fal (the crop)
+        "latency_s": round(res.latency_s, 3),
+        "num_people": res.num_people,
+        "usable": res.num_people == 1 and res.ply is not None,
+        "vertex_count": None,
+        "face_count": None,
+        "mesh_url": res.mesh_url,
+        "visualization_url": res.visualization_url,
+        "metadata": res.metadata,
+    }
+    if res.ply is not None:
+        (out / f"{frame.stem}.ply").write_bytes(res.ply)
+        record["vertex_count"], record["face_count"] = mesh_counts(res.ply)
+    if res.visualization is not None:
+        (out / f"{frame.stem}_vis{vis_extension(res)}").write_bytes(res.visualization)
+    (out / f"{frame.stem}.json").write_text(json.dumps(record, indent=1))
+    return record
 
 
 async def main(args: argparse.Namespace) -> None:
@@ -85,11 +109,24 @@ async def main(args: argparse.Namespace) -> None:
         await asyncio.gather(*(one(i, f) for i, f in todo))
     wall = time.perf_counter() - t0
 
-    summary = write_summary(
-        args.out,
-        {"last_batch": {"sent": len(todo), "ok": len(records), "wall_s": round(wall, 2), "errors": errors}},
-    )
-    print(json.dumps({k: v for k, v in summary.items() if k != "frames"}, indent=1))
+    # Summarize over everything in the out dir, including frames from earlier runs.
+    done = [json.loads(p.read_text()) for p in sorted(args.out.glob("*.json")) if p.name != "summary.json"]
+    lat = sorted(r["latency_s"] for r in done)
+    summary = {
+        "frames": len(done),
+        "usable": sum(r["usable"] for r in done),
+        "num_people_counts": {str(k): sum(r["num_people"] == k for r in done) for k in {r["num_people"] for r in done}},
+        "vertex_counts": sorted({r["vertex_count"] for r in done if r["vertex_count"] is not None}),
+        "face_counts": sorted({r["face_count"] for r in done if r["face_count"] is not None}),
+        "latency_s": {
+            "p50": statistics.median(lat) if lat else None,
+            "p95": lat[min(len(lat) - 1, int(0.95 * len(lat)))] if lat else None,
+            "max": lat[-1] if lat else None,
+        },
+        "last_batch": {"sent": len(todo), "ok": len(records), "wall_s": round(wall, 2), "errors": errors},
+    }
+    (args.out / "summary.json").write_text(json.dumps(summary, indent=1))
+    print(json.dumps(summary, indent=1))
     if len(summary["vertex_counts"]) > 1:
         print("WARNING: vertex count differs across frames — fixed-topology assumption broken")
 
