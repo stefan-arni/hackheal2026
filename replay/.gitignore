@@ -1,0 +1,14 @@
+# Secrets — shared repo, never commit
+.env
+
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Patient video, frames and raw fal output stay local (privacy)
+data/
+
+# Precomputed bundles: only demo bundles are committed
+cache/*
+!cache/.gitkeep
+!cache/demo_*/
