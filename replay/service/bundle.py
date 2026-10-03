@@ -1,6 +1,7 @@
 """Pack/unpack replay bundles (REPLAY_SPEC.md "Bundle format").
 
     <dir>/meta.json   trialId, t [F] (ms), counts, events, com, bos, margin, heatmap, noise_floor, quality, frames
+    <dir>/analytics.json  per-trial analytics (service/analytics.py), when the bundle is aligned
     <dir>/faces.bin   Uint32 [faces_count * 3]
     <dir>/verts.bin   Float32 [F * V * 3], little-endian, frame-major; Float16 when the float32
                       file would exceed FLOAT16_ABOVE_BYTES (meta.verts_dtype says which)
@@ -28,6 +29,8 @@ def _list(x):
 def _clean(x):
     if isinstance(x, dict):
         return {k: _clean(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_clean(v) for v in x]
     if isinstance(x, float) and not np.isfinite(x):
         return None
     return x
@@ -40,6 +43,7 @@ def write_bundle(
     *,
     events: list[dict] | None = None,
     frames: list[dict] | None = None,
+    analytics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write a bundle from pipeline.process() (or pipeline.raw_display()) output."""
     out.mkdir(parents=True, exist_ok=True)
@@ -67,6 +71,12 @@ def write_bundle(
         "quality": _clean(result.get("quality", {})),
         "frames": frames or [],
     }
+    if analytics is not None:
+        (out / "analytics.json").write_text(json.dumps(_clean(analytics), indent=1, allow_nan=False))
+        meta["analytics"] = {"url": "analytics.json", "quality": analytics["quality"]["label"],
+                             "min_margin_cm": analytics.get("margin", {}).get("min_cm"),
+                             "time_outside_bos_s": analytics.get("margin", {}).get("time_outside_bos_s"),
+                             "ml_sway_rms_cm": analytics["ml_sway"]["rms_cm"]}
     (out / "verts.bin").write_bytes(verts.tobytes())
     (out / "faces.bin").write_bytes(faces.tobytes())
     (out / "meta.json").write_text(json.dumps(meta, allow_nan=False))

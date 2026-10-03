@@ -21,7 +21,7 @@ from pathlib import Path
 REPLAY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPLAY_ROOT))
 
-from service import bundle, pipeline  # noqa: E402
+from service import analytics, bundle, pipeline  # noqa: E402
 
 
 def main(a: argparse.Namespace) -> None:
@@ -46,11 +46,13 @@ def main(a: argparse.Namespace) -> None:
         if v:
             shutil.copy2(a.run_dir / v, a.out / "frames" / v)
         frames.append({"t": round(t * 1000, 1), "fal_vis_url": f"frames/{v}" if v else None})
-    meta = bundle.write_bundle(a.out, a.out.name, res, events=ev["events"], frames=frames)
+    stats = analytics.compute(res, ev["events"], a.expected_stance)
+    meta = bundle.write_bundle(a.out, a.out.name, res, events=ev["events"], frames=frames, analytics=stats)
     size = sum(p.stat().st_size for p in a.out.glob("*.bin")) + (a.out / "meta.json").stat().st_size
     q = res["quality"]
     print(f"{len(res['t_s'])} frames -> {a.out}  ({size / 1e6:.1f} MB, verts {meta['verts_dtype']}, process {dt:.2f}s)")
     print(json.dumps({k: v for k, v in q.items() if k != "reprojection"}, indent=1))
+    print("analytics:", json.dumps(meta.get("analytics")))
     if "reprojection" in q:
         print("reprojection:", json.dumps({k: v for k, v in q["reprojection"].items() if k != "per_frame_px"}))
 
@@ -63,4 +65,5 @@ if __name__ == "__main__":
     p.add_argument("--landmarks", type=Path, default=None)
     p.add_argument("--height-cm", type=float, default=None)
     p.add_argument("--synthetic", action="store_true")
+    p.add_argument("--expected-stance", default=None, help="double | tandem | single_left | single_right")
     main(p.parse_args())

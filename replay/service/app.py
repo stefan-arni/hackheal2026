@@ -45,7 +45,7 @@ from pydantic import BaseModel
 
 import numpy as np
 
-from service import bundle, geometry, pipeline
+from service import analytics, bundle, geometry, pipeline
 from service.fal_budget import Budget, BudgetError
 from service.fal_client_wrap import REPLAY_ROOT, CacheMiss, SamBodyClient
 from service.fal_mock import MockFal
@@ -242,7 +242,9 @@ async def finalize(trial: Trial, payload: EndPayload) -> None:
             result["quality"]["SYNTHETIC"] = True
         frames = [{"t": round(t * 1000, 1), "fal_vis_url": f"frames/{v}" if v else None}
                   for t, v in zip(run.t_s, run.vis_files)]
-        await asyncio.to_thread(bundle.write_bundle, trial.dir, trial.id, result, events=payload.events, frames=frames)
+        stats = analytics.compute(result, payload.events) if result["quality"].get("aligned") else None
+        await asyncio.to_thread(lambda: bundle.write_bundle(trial.dir, trial.id, result, events=payload.events,
+                                                            frames=frames, analytics=stats))
         trial.aligned = result["quality"]["aligned"]
         trial.state, trial.t_ready = "ready", time.time()
         log.info("trial %s ready in %.2fs after /end (%d frames)", trial.id, trial.t_ready - trial.t_end, len(run.t_s))

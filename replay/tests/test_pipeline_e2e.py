@@ -164,3 +164,27 @@ def test_gravity_override_and_check(synthetic):
     chk = pipeline.process(run, gt["events"], gt["patient_height_m"], up_check=up)
     assert chk["quality"]["gravity_vs_feet_deg"] < 1.0
     np.testing.assert_allclose(chk["com"], res["com"])  # a check never changes the result
+
+
+# --- analytics ----------------------------------------------------------------------------
+
+def test_analytics_on_synthetic(synthetic):
+    from service import analytics
+    gt, _, res = synthetic
+    a = analytics.compute(res, gt["events"], expected_stance="tandem")
+    ev = {e["kind"]: e["t"] / 1000 for e in gt["events"]}
+    t0 = res["t_s"][0]
+    # minimum margin happens during the pre-error lean / lift, not in calm stance
+    assert ev["foot_lift"] - 1.5 <= a["margin"]["min_at_ms"] / 1000 - t0 <= ev["foot_down"] + 0.5
+    assert a["margin"]["time_outside_bos_s"] >= 0
+    # side-to-side sway RMS matches the true COM within 3 mm
+    true_x = np.asarray(gt["com_floor"])[:, 0]
+    assert a["ml_sway"]["rms_cm"] == pytest.approx(true_x.std() * 100, abs=0.3)
+    # stance: tandem most of the time, a single-leg (right lifted -> standing on left) segment near the lift
+    st = a["stance"]
+    assert st["seconds"].get("double_tandem", 0) > 15
+    singles = [s for s in st["segments"] if s["stance"] == "single_left"]
+    assert singles and abs(singles[0]["start_ms"] / 1000 - ev["foot_lift"]) < 0.6
+    assert st["expected"]["stance"] == "tandem" and st["expected"]["fraction_matching"] > 0.85
+    assert a["trunk_lean_deg"]["ml_range"] < 10 and a["quality"]["label"] in ("good", "fair", "poor")
+    assert a["noise_floor_cm"]["x"] < 1.0

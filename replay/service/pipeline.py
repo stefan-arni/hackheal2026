@@ -257,12 +257,14 @@ def process(
     center_floor = g.align_to_floor(center, R, centroid)
     origin = centroid + R.T @ np.array([center_floor[0], floor_y, center_floor[2]])
     Va = g.align_to_floor(V, R, origin)
+    Ka = g.align_to_floor(K, R, origin)  # keypoints follow the mesh through every step
 
     # 5. metric scale
     heights = Va[stance][..., 1].max(axis=1)
     s = g.metric_scale(patient_height_m, heights) if patient_height_m else 1.0
     quality["mesh_height_m"] = round(float(np.median(heights)), 3)
     Va = Va * s
+    Ka = Ka * s
 
     # Ground contact prior: in a balance trial at least one foot is on the floor. SAM's per-frame
     # vertical noise (~1–3 cm) makes the stance foot float or sink, which empties or floods the
@@ -270,12 +272,14 @@ def process(
     lowest = np.percentile(Va[..., 1], GROUND_ANCHOR_PCT, axis=1)
     anchor = np.where(np.abs(lowest) < GROUND_ANCHOR_MAX_M, lowest, 0.0)
     Va = Va - anchor[:, None, None] * np.array([0.0, 1.0, 0.0])
+    Ka = Ka - anchor[:, None, None] * np.array([0.0, 1.0, 0.0])
     quality["ground_anchor_cm"] = {"median_abs": round(float(np.median(np.abs(anchor))) * 100, 2),
                                    "max_abs": round(float(np.max(np.abs(anchor))) * 100, 2),
                                    "frames_not_anchored": int((np.abs(lowest) >= GROUND_ANCHOR_MAX_M).sum())}
 
     # 6. temporal smoothing (non-uniform timestamps)
     Vs = g.gaussian_smooth(t, Va, SMOOTH_SIGMA_S)
+    Ks = g.gaussian_smooth(t, Ka, SMOOTH_SIGMA_S)
 
     # 11 (early). noise floor on unsmoothed stance foot vertices; it also sets the contact band
     foot_v = Va[stance][..., 1].mean(axis=0) < FOOT_HEIGHT_M
@@ -295,6 +299,8 @@ def process(
     return {
         "t_s": t,
         "verts": Vs,
+        "keypoints": Ks,  # (F,K,3) floor frame, metric, smoothed; names in kp_names
+        "kp_names": names,
         "faces": run.faces,
         "com": com,
         "bos": bos,
