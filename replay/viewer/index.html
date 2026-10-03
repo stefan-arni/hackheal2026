@@ -26,10 +26,11 @@
     import { mountReplay } from './replay.js';
     // ?src=<folder>/  — a run folder (summary.json + .ply) or a service bundle (meta.json + .bin)
     const src = new URLSearchParams(location.search).get('src') || '/data/fal_out/synthetic/';
-    const view = new URLSearchParams(location.search).get('view');
+    const q = new URLSearchParams(location.search);
+    // ?view=side|top  ?jump=step (open in instant-replay mode on the biggest event)
     mountReplay(document.getElementById('replay'), src, {
-      onSeek: t => console.log('[replay] seek', t),
-    }).then(r => { window.replay = r; if (view) r.setView(view); });
+      onSeek: t => console.log('[replay] seek', t), jumpTo: q.get('jump') || undefined,
+    }).then(r => { window.replay = r; if (q.get('view')) r.setView(q.get('view'), 0); });
   </script>
 </body>
 </html>

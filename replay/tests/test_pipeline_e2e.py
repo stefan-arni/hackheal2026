@@ -188,3 +188,19 @@ def test_analytics_on_synthetic(synthetic):
     assert st["expected"]["stance"] == "tandem" and st["expected"]["fraction_matching"] > 0.85
     assert a["trunk_lean_deg"]["ml_range"] < 10 and a["quality"]["label"] in ("good", "fair", "poor")
     assert a["noise_floor_cm"]["x"] < 1.0
+
+
+def test_report_and_bundle_on_synthetic(synthetic, tmp_path):
+    """Bundle + analytics + one-page report build end to end (no video frames: no filmstrips)."""
+    from service import analytics, bundle, report
+    gt, _, res = synthetic
+    stats = analytics.compute(res, gt["events"])
+    meta = bundle.write_bundle(tmp_path, "synthetic", res, events=gt["events"], analytics=stats)
+    assert meta["camera"]["M"] and len(meta["camera"]["t"]) == len(res["t_s"])
+    assert (tmp_path / "verts_raw.bin").exists() and meta["touchdowns"] and meta["series"]["stance"]
+    page = report.write_report(tmp_path, meta, stats, res, title="synthetic").read_text()
+    for needle in ("Min margin", "Time outside BOS", "Trunk lean p5–p95", "Stance check", "stabilogram",
+                   "forward/back", "Noise floor"):
+        assert needle in page
+    assert "validated" not in page.lower()
+    assert (tmp_path / "report_assets" / "hero.png").exists()

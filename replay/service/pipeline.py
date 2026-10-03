@@ -299,6 +299,7 @@ def process(
     return {
         "t_s": t,
         "verts": Vs,
+        "verts_raw": Va,  # per-frame fit before smoothing: what lines up with the video frame
         "keypoints": Ks,  # (F,K,3) floor frame, metric, smoothed; names in kp_names
         "kp_names": names,
         "faces": run.faces,
@@ -314,6 +315,17 @@ def process(
         "origin_cam": Y_UP @ origin,
         "R_cam_to_floor": R @ Y_UP,
         "scale": s,
+        # floor frame -> SAM's raw camera frame (OpenCV), per frame: p_cam = M @ p_floor + t_f.
+        # Inverts every step (anchor, scale, rotation, origin, Y_UP, focal normalization), so
+        # projecting with that frame's SAM focal and its image center lands on the video frame.
+        "camera": {
+            "M": (Y_UP @ R.T / s).tolist(),
+            "t": [(Y_UP @ (R.T @ (np.array([0.0, a, 0.0]) / s) + origin) - sh).tolist()
+                  for a, sh in zip(anchor, shift)],
+            "focal": run.focal.tolist(),
+            "image_size": None if run.image_size is None else run.image_size.tolist(),
+            "crop": None if run.crop is None else run.crop.tolist(),
+        },
         "stems": run.stems,
         "vis_files": run.vis_files,
         "quality": {
@@ -325,6 +337,7 @@ def process(
             "floor_source": floor_source,
             "watertight": g.is_watertight(run.faces),
             "scale": float(s),
+            "patient_height_cm": round(patient_height_m * 100, 1) if patient_height_m else None,
             "ap_real": bool(nf["z"] < 0.01),
         },
     }

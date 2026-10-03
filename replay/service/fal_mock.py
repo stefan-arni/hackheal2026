@@ -17,12 +17,20 @@ import random
 from pathlib import Path
 from typing import Any
 
+from service.capture_defaults import LIVE_MAX_HEIGHT_PX
+from service.images import downscale_jpeg
+
 
 class MockFal:
     def __init__(self, run_dir: Path, latency_s: tuple[float, float] = (1.5, 3.5)):
         self.run_dir = Path(run_dir).resolve()
         self.latency_s = latency_s
-        self.index = {hashlib.sha256(p.read_bytes()).hexdigest(): p.stem for p in (self.run_dir / "input").glob("*.jpg")}
+        # match both the original frame and the service's live-downscaled version of it
+        self.index = {}
+        for p in (self.run_dir / "input").glob("*.jpg"):
+            b = p.read_bytes()
+            self.index[hashlib.sha256(b).hexdigest()] = p.stem
+            self.index[hashlib.sha256(downscale_jpeg(b, LIVE_MAX_HEIGHT_PX)[0]).hexdigest()] = p.stem
         if not self.index:
             raise FileNotFoundError(f"no input/*.jpg in {self.run_dir}")
         self.calls = 0

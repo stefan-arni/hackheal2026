@@ -149,7 +149,10 @@ def plot(path, t, com, hip, pch, sch, lean, pcl, margin, sway, lean_s, scout, pc
     ax0.set_ylim(lo, hi + 0.55 * (hi - lo))  # headroom for the legend
     ax0.legend(loc="upper left", fontsize=11, frameon=False, ncol=2)
     ax0.set_title("IMG_9691 (44.8–64.1 s): SAM replay vs posecam vs scout — side-to-side sway, trunk lean, events",
-                  fontsize=15, weight="bold", loc="left")
+                  fontsize=15, weight="bold", loc="left", pad=44)
+    ax0.text(0, 1.02, "Agreement between two models on the same video, not ground truth.\nMediaPipe hip pixels are converted to cm "
+             "with SAM's own depth, focal and height scale, so the cm comparison shares SAM's scale.",
+             transform=ax0.transAxes, fontsize=11.5, color="#b91c1c", weight="bold")
     l1 = lean_s["sam_trunk_ml_vs_posecam_trunk_angle_2d"]
     ax1.plot(t, lean, color=c["sam"], lw=3, label="SAM: trunk lean (pelvis→neck, floor frame)")
     ax1.plot(t, pcl, color=c["pc"], lw=2.2, label=f"posecam: trunk_angle_deg (2D)   r={l1['r']:.2f}, RMS diff {l1['rms_diff_deg']:.0f}°")

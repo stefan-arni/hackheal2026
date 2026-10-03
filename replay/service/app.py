@@ -45,11 +45,12 @@ from pydantic import BaseModel
 
 import numpy as np
 
-from service import analytics, bundle, geometry, pipeline
+from service import analytics, bundle, geometry, pipeline, report
 from service.fal_budget import Budget, BudgetError
 from service.fal_client_wrap import REPLAY_ROOT, CacheMiss, SamBodyClient
 from service.fal_mock import MockFal
 from service.capture_defaults import LIVE_MAX_HEIGHT_PX
+from service.images import downscale_jpeg
 from service.runs import DEFAULT_CONVENTIONS, load_records, write_frame, write_summary
 
 log = logging.getLogger("replay")
@@ -128,28 +129,32 @@ def get_trial(trial_id: str, create: bool = False) -> Trial:
     return trials[trial_id]
 
 
+SRC_HEIGHT = 640
+
+
+def save_source_frame(path: Path, jpeg: bytes) -> None:
+    """Keep a small copy of the image sent to fal, for the viewer's video overlay and the report."""
+    with Image.open(io.BytesIO(jpeg)) as im:
+        k = SRC_HEIGHT / im.height
+        im.convert("RGB").resize((round(im.width * k), SRC_HEIGHT), Image.LANCZOS).save(path, "JPEG", quality=82)
+
+
 def downscale_for_live(jpeg: bytes, mask: bytes | None) -> tuple[bytes, bytes | None, list[int], float]:
     """Live trials: shrink frames taller than LIVE_MAX_HEIGHT_PX (faster fal inference). The
     trial's fixed crop means every frame gets the same scale. Returns (jpeg, mask, size, scale)."""
-    with Image.open(io.BytesIO(jpeg)) as im:
-        W, H = im.size
-        if H <= LIVE_MAX_HEIGHT_PX:
-            return jpeg, mask, [W, H], 1.0
-        s = LIVE_MAX_HEIGHT_PX / H
-        size = (round(W * s), LIVE_MAX_HEIGHT_PX)
-        buf = io.BytesIO()
-        im.convert("RGB").resize(size, Image.LANCZOS).save(buf, "JPEG", quality=92)
-    if mask is not None:
+    jpeg, size, s = downscale_jpeg(jpeg, LIVE_MAX_HEIGHT_PX)
+    if s != 1.0 and mask is not None:
         with Image.open(io.BytesIO(mask)) as m:
             mb = io.BytesIO()
-            m.resize(size, Image.NEAREST).save(mb, "PNG")
+            m.resize(tuple(size), Image.NEAREST).save(mb, "PNG")
             mask = mb.getvalue()
-    return buf.getvalue(), mask, list(size), s
+    return jpeg, mask, size, s
 
 
 async def run_frame(trial: Trial, stem: str, jpeg: bytes, mask: bytes | None, t_ms: float, extra: dict) -> None:
     try:
         jpeg, mask, size, scale = downscale_for_live(jpeg, mask)
+        await asyncio.to_thread(save_source_frame, trial.frames_dir / f"{stem}_src.jpg", jpeg)
         extra = {**extra, "downscale": round(scale, 5)}
         res = await sam().reconstruct(jpeg, mask, run=trial.id, priority=0 if extra["kind"] == "burst" else 1)
         write_frame(
@@ -213,7 +218,7 @@ async def post_frame(
 
 class EndPayload(BaseModel):
     events: list[dict[str, Any]] = []
-    patient_height_cm: float
+    patient_height_cm: float | None = None  # None: keep SAM's own metric scale
     landmarks_2d: Any | None = None
 
 
@@ -233,18 +238,28 @@ async def finalize(trial: Trial, payload: EndPayload) -> None:
         if up is not None:
             up_kw = {"up_cam": up, "up_source": "phone_gravity"} if GRAVITY_MODE == "override" else {"up_check": up}
         try:
-            result = await asyncio.to_thread(
-                lambda: pipeline.process(run, payload.events, payload.patient_height_cm / 100, **up_kw))
+            height_m = payload.patient_height_cm / 100 if payload.patient_height_cm else None
+            result = await asyncio.to_thread(lambda: pipeline.process(run, payload.events, height_m, **up_kw))
         except NotImplementedError as e:
             log.warning("geometry.py not implemented (%s); publishing raw camera-frame bundle", e)
             result = pipeline.raw_display(run)
         if any(r["metadata"].get("SYNTHETIC") for r in load_records(trial.frames_dir)):
             result["quality"]["SYNTHETIC"] = True
-        frames = [{"t": round(t * 1000, 1), "fal_vis_url": f"frames/{v}" if v else None}
-                  for t, v in zip(run.t_s, run.vis_files)]
+        frames = []
+        for t, v, stem in zip(result["t_s"], result.get("vis_files", run.vis_files), result.get("stems", run.stems)):
+            fr = {"t": round(t * 1000, 1), "fal_vis_url": f"frames/{v}" if v else None}
+            src = trial.frames_dir / f"{stem}_src.jpg"
+            if src.exists():
+                with Image.open(src) as im:
+                    sent_h = next((r["image_size"][1] for r in load_records(trial.frames_dir)
+                                   if Path(r["frame"]).stem == stem), im.height)
+                fr["src_url"], fr["src_scale"] = f"frames/{stem}_src.jpg", round(im.height / sent_h, 5)
+            frames.append(fr)
         stats = analytics.compute(result, payload.events) if result["quality"].get("aligned") else None
-        await asyncio.to_thread(lambda: bundle.write_bundle(trial.dir, trial.id, result, events=payload.events,
-                                                            frames=frames, analytics=stats))
+        meta = await asyncio.to_thread(lambda: bundle.write_bundle(trial.dir, trial.id, result, events=payload.events,
+                                                                   frames=frames, analytics=stats))
+        if stats is not None:
+            await asyncio.to_thread(report.write_report, trial.dir, meta, stats, result)
         trial.aligned = result["quality"]["aligned"]
         trial.state, trial.t_ready = "ready", time.time()
         log.info("trial %s ready in %.2fs after /end (%d frames)", trial.id, trial.t_ready - trial.t_end, len(run.t_s))
@@ -297,6 +312,14 @@ async def post_end(trial_id: str, payload: EndPayload) -> dict:
     asyncio.create_task(finalize(trial, payload))
     return {"status": "processing", "received": trial.received, "inflight": trial.received - trial.done - trial.failed,
             "missing_from_cache": trial.missing}
+
+
+@app.get("/replay/{trial_id}/report")
+async def report_page(trial_id: str) -> FileResponse:
+    path = (TRIALS_DIR / trial_id / "report.html").resolve()
+    if not path.is_relative_to(TRIALS_DIR.resolve()) or not path.is_file():
+        raise HTTPException(404, "no report for this trial yet")
+    return FileResponse(path)
 
 
 @app.get("/replay/{trial_id}/status")
