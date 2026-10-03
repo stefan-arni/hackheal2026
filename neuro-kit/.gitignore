@@ -1,0 +1,7 @@
+.DS_Store
+MANIFEST.txt
+*.zip
+.env
+.env.*
+node_modules/
+__pycache__/
